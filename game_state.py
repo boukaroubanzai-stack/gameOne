@@ -242,28 +242,31 @@ class GameState:
                 return
 
         # Try direct path first
-        if not self._collides_with_other(unit, new_x, new_y):
+        blocker_on_path = self._collides_with_other(unit, new_x, new_y)
+        if not blocker_on_path:
             unit.x, unit.y = new_x, new_y
             return
 
-        # Blocked — try steering left, then right (perpendicular)
-        px, py = -ny, nx  # perpendicular
-        for sign in (1, -1):
-            alt_x = unit.x + px * move * sign
-            alt_y = unit.y + py * move * sign
-            if not self._collides_with_other(unit, alt_x, alt_y):
-                unit.x, unit.y = alt_x, alt_y
-                return
-
-        # Try diagonals (45 degrees off the main direction)
-        for sign in (1, -1):
-            diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
-            diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
-            if not self._collides_with_other(unit, diag_x, diag_y):
-                unit.x, unit.y = diag_x, diag_y
-                return
-
-        # Completely blocked — stay put this frame
+        # Blocked — check if blocker is also moving
+        blocker_is_moving = hasattr(blocker_on_path, 'waypoints') and blocker_on_path.waypoints
+        if blocker_is_moving:
+            # Two moving units: one gets priority to steer, the other waits
+            if id(unit) > id(blocker_on_path):
+                # This unit has priority — try steering around
+                px, py = -ny, nx
+                for sign in (1, -1):
+                    alt_x = unit.x + px * move * sign
+                    alt_y = unit.y + py * move * sign
+                    if not self._collides_with_other(unit, alt_x, alt_y):
+                        unit.x, unit.y = alt_x, alt_y
+                        return
+                for sign in (1, -1):
+                    diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
+                    diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
+                    if not self._collides_with_other(unit, diag_x, diag_y):
+                        unit.x, unit.y = diag_x, diag_y
+                        return
+            # No priority or steering failed — wait for the other unit to move
 
     def update(self, dt):
         if self.game_over:
