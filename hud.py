@@ -128,12 +128,51 @@ class HUD:
 
         # Selected units info
         elif game_state.selected_units:
+            info_x = 630
             count = len(game_state.selected_units)
-            info_text = f"Selected: {count} unit{'s' if count > 1 else ''}"
-            surface.blit(self.font.render(info_text, True, HUD_TEXT),
-                         (630, MAP_HEIGHT + 10))
-            surface.blit(self.small_font.render("RClick: Move | RClick mineral: Mine", True, (150, 150, 150)),
-                         (630, MAP_HEIGHT + 35))
+            if count == 1:
+                u = game_state.selected_units[0]
+                surface.blit(self.font.render(f"{u.name}", True, HUD_TEXT),
+                             (info_x, MAP_HEIGHT + 8))
+                hp_color = (0, 200, 0) if u.hp > u.max_hp * 0.5 else (255, 200, 0) if u.hp > u.max_hp * 0.25 else (255, 60, 60)
+                surface.blit(self.small_font.render(f"HP: {u.hp}/{u.max_hp}", True, hp_color),
+                             (info_x, MAP_HEIGHT + 30))
+                surface.blit(self.small_font.render(f"Speed: {u.speed}", True, HUD_TEXT),
+                             (info_x + 120, MAP_HEIGHT + 30))
+                if u.attack_range > 0:
+                    surface.blit(self.small_font.render(f"Damage: {u.damage}  Rate: {u.fire_rate}/s  Range: {u.attack_range}", True, HUD_TEXT),
+                                 (info_x, MAP_HEIGHT + 48))
+                    state_text = "Stuck" if u.stuck else "Attacking" if u.attacking else "Moving" if u.waypoints else "Idle"
+                else:
+                    # Worker-specific info
+                    from units import Worker
+                    if isinstance(u, Worker):
+                        state_label = u.state.replace("_", " ").title()
+                        carry_text = f"Carrying: {u.carry_amount}" if u.carry_amount > 0 else ""
+                        surface.blit(self.small_font.render(f"State: {state_label}  {carry_text}", True, HUD_TEXT),
+                                     (info_x, MAP_HEIGHT + 48))
+                    state_text = "Stuck" if u.stuck else "Moving" if u.waypoints else "Idle"
+                stuck_color = (255, 100, 100) if u.stuck else (150, 200, 150)
+                surface.blit(self.small_font.render(f"Status: {state_text}", True, stuck_color),
+                             (info_x, MAP_HEIGHT + 66))
+            else:
+                surface.blit(self.font.render(f"Selected: {count} units", True, HUD_TEXT),
+                             (info_x, MAP_HEIGHT + 8))
+                # Summarize group
+                from units import Soldier, Tank, Worker
+                soldiers = sum(1 for u in game_state.selected_units if isinstance(u, Soldier))
+                tanks = sum(1 for u in game_state.selected_units if isinstance(u, Tank))
+                workers = sum(1 for u in game_state.selected_units if isinstance(u, Worker))
+                parts = []
+                if soldiers: parts.append(f"{soldiers} Soldier{'s' if soldiers > 1 else ''}")
+                if tanks: parts.append(f"{tanks} Tank{'s' if tanks > 1 else ''}")
+                if workers: parts.append(f"{workers} Worker{'s' if workers > 1 else ''}")
+                surface.blit(self.small_font.render("  ".join(parts), True, HUD_TEXT),
+                             (info_x, MAP_HEIGHT + 30))
+                avg_hp = sum(u.hp for u in game_state.selected_units) / count
+                avg_max = sum(u.max_hp for u in game_state.selected_units) / count
+                surface.blit(self.small_font.render(f"Avg HP: {int(avg_hp)}/{int(avg_max)}", True, HUD_TEXT),
+                             (info_x, MAP_HEIGHT + 48))
 
         # Controls help
         help_text = "T: Town Center | B: Barracks | F: Factory | LClick: Select | RClick: Move/Mine | ESC: Cancel"

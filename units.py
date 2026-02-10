@@ -42,6 +42,11 @@ class Unit:
         self.fire_cooldown = 0.0
         self.target_enemy = None
         self.attacking = False
+        # Stuck detection
+        self.stuck = False
+        self.stuck_timer = 0.0
+        self._last_x = float(x)
+        self._last_y = float(y)
 
     @property
     def alive(self):
@@ -50,11 +55,15 @@ class Unit:
     def set_target(self, pos):
         self.target_enemy = None
         self.attacking = False
+        self.stuck = False
+        self.stuck_timer = 0.0
         self.waypoints = [pos]
 
     def add_waypoint(self, pos):
         self.target_enemy = None
         self.attacking = False
+        self.stuck = False
+        self.stuck_timer = 0.0
         self.waypoints.append(pos)
 
     def distance_to(self, other_x, other_y):

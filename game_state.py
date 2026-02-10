@@ -241,32 +241,43 @@ class GameState:
                 unit.waypoints.pop(0)
                 return
 
+        # If stuck, try moving left (perpendicular to facing direction) to get unstuck
+        px, py = -ny, nx  # left direction relative to facing
+        if unit.stuck:
+            left_x = unit.x + px * move
+            left_y = unit.y + py * move
+            if not self._collides_with_other(unit, left_x, left_y):
+                unit.x, unit.y = left_x, left_y
+                return
+
         # Try direct path first
         blocker_on_path = self._collides_with_other(unit, new_x, new_y)
         if not blocker_on_path:
             unit.x, unit.y = new_x, new_y
             return
 
-        # Blocked — check if blocker is also moving
+        # Blocked by another moving unit — lower-priority unit waits
         blocker_is_moving = hasattr(blocker_on_path, 'waypoints') and blocker_on_path.waypoints
-        if blocker_is_moving:
-            # Two moving units: one gets priority to steer, the other waits
-            if id(unit) > id(blocker_on_path):
-                # This unit has priority — try steering around
-                px, py = -ny, nx
-                for sign in (1, -1):
-                    alt_x = unit.x + px * move * sign
-                    alt_y = unit.y + py * move * sign
-                    if not self._collides_with_other(unit, alt_x, alt_y):
-                        unit.x, unit.y = alt_x, alt_y
-                        return
-                for sign in (1, -1):
-                    diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
-                    diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
-                    if not self._collides_with_other(unit, diag_x, diag_y):
-                        unit.x, unit.y = diag_x, diag_y
-                        return
-            # No priority or steering failed — wait for the other unit to move
+        if blocker_is_moving and id(unit) < id(blocker_on_path):
+            return  # wait for the higher-priority unit to steer around
+
+        # Try steering around the blocker (perpendicular)
+        for sign in (1, -1):
+            alt_x = unit.x + px * move * sign
+            alt_y = unit.y + py * move * sign
+            if not self._collides_with_other(unit, alt_x, alt_y):
+                unit.x, unit.y = alt_x, alt_y
+                return
+
+        # Try diagonals (45 degrees off the main direction)
+        for sign in (1, -1):
+            diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
+            diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
+            if not self._collides_with_other(unit, diag_x, diag_y):
+                unit.x, unit.y = diag_x, diag_y
+                return
+
+        # Completely blocked from all directions — stay put this frame
 
     def update(self, dt):
         if self.game_over:
@@ -315,6 +326,22 @@ class GameState:
         for enemy in enemies:
             if not enemy.attacking and enemy.waypoints:
                 self._move_unit_with_avoidance(enemy, dt)
+
+        # Update stuck detection for all units
+        all_units = self.units + enemies
+        for unit in all_units:
+            if not unit.alive:
+                continue
+            moved = math.hypot(unit.x - unit._last_x, unit.y - unit._last_y)
+            if unit.waypoints and not unit.attacking and moved < 0.1:
+                unit.stuck_timer += dt
+                if unit.stuck_timer >= 0.5:
+                    unit.stuck = True
+            else:
+                unit.stuck_timer = 0.0
+                unit.stuck = False
+            unit._last_x = unit.x
+            unit._last_y = unit.y
 
         # Update buildings (production)
         for building in self.buildings:
