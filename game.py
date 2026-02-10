@@ -6,7 +6,7 @@ from settings import (
 )
 from game_state import GameState
 from hud import HUD
-from units import Soldier, Tank, Worker
+from units import Soldier, Tank, Worker, Yanuses
 from buildings import Barracks, Factory, TownCenter
 
 
@@ -20,6 +20,7 @@ def main():
     Soldier.load_assets()
     Tank.load_assets()
     Worker.load_assets()
+    Yanuses.load_assets()
     Barracks.load_assets()
     Factory.load_assets()
     TownCenter.load_assets()
@@ -38,6 +39,12 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+
+            # When game is over, only allow quit and ESC
+            if state.game_over:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
+                continue
 
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -160,6 +167,28 @@ def main():
         # Draw units
         for unit in state.units:
             unit.draw(screen)
+            # Draw attack line when unit is firing
+            if unit.attacking and unit.target_enemy:
+                t = unit.target_enemy
+                if hasattr(t, 'size'):
+                    tx, ty = int(t.x), int(t.y)
+                else:
+                    tx, ty = t.x + t.w // 2, t.y + t.h // 2
+                pygame.draw.line(screen, (255, 255, 0),
+                                 (int(unit.x), int(unit.y)), (tx, ty), 1)
+
+        # Draw enemies
+        for enemy in state.wave_manager.enemies:
+            enemy.draw(screen)
+            # Draw attack line when enemy is firing
+            if enemy.attacking and enemy.target_enemy:
+                t = enemy.target_enemy
+                if hasattr(t, 'size'):
+                    tx, ty = int(t.x), int(t.y)
+                else:
+                    tx, ty = t.x + t.w // 2, t.y + t.h // 2
+                pygame.draw.line(screen, (255, 80, 80),
+                                 (int(enemy.x), int(enemy.y)), (tx, ty), 1)
 
         # Draw placement ghost
         if state.placement_mode:
@@ -189,6 +218,23 @@ def main():
 
         # Draw HUD
         hud.draw(screen, state)
+
+        # Game over overlay
+        if state.game_over:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 150))
+            screen.blit(overlay, (0, 0))
+            big_font = pygame.font.SysFont(None, 72)
+            small_font = pygame.font.SysFont(None, 32)
+            if state.game_result == "victory":
+                text = big_font.render("VICTORY!", True, (0, 255, 100))
+            else:
+                text = big_font.render("DEFEAT", True, (255, 60, 60))
+            text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))
+            screen.blit(text, text_rect)
+            sub = small_font.render("Press ESC to quit", True, (200, 200, 200))
+            sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
+            screen.blit(sub, sub_rect)
 
         pygame.display.flip()
 

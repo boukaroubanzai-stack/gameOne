@@ -1,8 +1,11 @@
+import math
+import random
 import pygame
 from resources import ResourceManager
 from buildings import Barracks, Factory, TownCenter
-from units import Worker
+from units import Worker, Soldier, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
+from waves import WaveManager
 from settings import (
     MAP_HEIGHT, WIDTH, STARTING_WORKERS,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
@@ -18,6 +21,9 @@ class GameState:
         self.selected_units = []
         self.selected_building = None
         self.placement_mode = None  # None, "barracks", "factory", "towncenter"
+        self.wave_manager = WaveManager()
+        self.game_over = False
+        self.game_result = None  # "victory" or "defeat"
 
         self._setup_starting_state()
 
@@ -152,10 +158,176 @@ class GameState:
         for unit in self.selected_units:
             unit.add_waypoint(pos)
 
+    def _place_unit_at_free_spot(self, unit):
+        """Nudge a newly spawned unit to a free spot if it overlaps an existing unit."""
+        if not self._collides_with_other(unit, unit.x, unit.y):
+            return
+        # Spiral outward to find a free spot
+        spacing = unit.size * 2
+        for ring in range(1, 10):
+            for dx in range(-ring, ring + 1):
+                for dy in range(-ring, ring + 1):
+                    if abs(dx) != ring and abs(dy) != ring:
+                        continue
+                    nx = unit.x + dx * spacing
+                    ny = unit.y + dy * spacing
+                    if nx < unit.size or nx > WIDTH - unit.size:
+                        continue
+                    if ny < unit.size or ny > MAP_HEIGHT - unit.size:
+                        continue
+                    if not self._collides_with_other(unit, nx, ny):
+                        unit.x, unit.y = nx, ny
+                        return
+
+    def _collides_with_other(self, unit, x, y):
+        """Check if unit at position (x, y) would overlap any other unit."""
+        all_units = self.units + self.wave_manager.enemies
+        for other in all_units:
+            if other is unit:
+                continue
+            dist = math.hypot(x - other.x, y - other.y)
+            if dist < unit.size + other.size:
+                return other
+        return None
+
+    def _move_unit_with_avoidance(self, unit, dt):
+        """Move a unit toward its waypoint, steering around blocking units."""
+        if not unit.waypoints:
+            return
+        tx, ty = unit.waypoints[0]
+        dx = tx - unit.x
+        dy = ty - unit.y
+        dist = math.hypot(dx, dy)
+        if dist < 2:
+            unit.waypoints.pop(0)
+            return
+
+        move = unit.speed * dt
+        if move >= dist:
+            # Close enough to snap — check if destination is free
+            blocker = self._collides_with_other(unit, tx, ty)
+            if not blocker:
+                unit.x, unit.y = tx, ty
+                unit.waypoints.pop(0)
+            else:
+                # Destination blocked — try to stop near it
+                nx, ny = dx / dist, dy / dist
+                stop_dist = unit.size + blocker.size
+                new_x = blocker.x - nx * stop_dist
+                new_y = blocker.y - ny * stop_dist
+                if not self._collides_with_other(unit, new_x, new_y):
+                    unit.x, unit.y = new_x, new_y
+                unit.waypoints.pop(0)
+            return
+
+        nx, ny = dx / dist, dy / dist
+        new_x = unit.x + nx * move
+        new_y = unit.y + ny * move
+
+        # Try direct path first
+        if not self._collides_with_other(unit, new_x, new_y):
+            unit.x, unit.y = new_x, new_y
+            return
+
+        # Blocked — try steering left, then right (perpendicular)
+        px, py = -ny, nx  # perpendicular
+        for sign in (1, -1):
+            alt_x = unit.x + px * move * sign
+            alt_y = unit.y + py * move * sign
+            if not self._collides_with_other(unit, alt_x, alt_y):
+                unit.x, unit.y = alt_x, alt_y
+                return
+
+        # Try diagonals (45 degrees off the main direction)
+        for sign in (1, -1):
+            diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
+            diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
+            if not self._collides_with_other(unit, diag_x, diag_y):
+                unit.x, unit.y = diag_x, diag_y
+                return
+
+        # Completely blocked — stay put this frame
+
     def update(self, dt):
+        if self.game_over:
+            return
+
+        enemies = self.wave_manager.enemies
+
+        # Update player units
         for unit in self.units:
-            unit.update(dt)
+            if isinstance(unit, Worker) and unit.state != "idle":
+                # Worker mining state machine: handle movement with avoidance,
+                # then let the worker check for state transitions
+                if unit.waypoints:
+                    self._move_unit_with_avoidance(unit, dt)
+                # Run worker state logic (mining timer, deposits, etc.)
+                # but skip the base movement since we already handled it
+                unit.update_state(dt)
+            elif unit.attacking:
+                # Combat unit attacking — check target still valid
+                target = unit.target_enemy
+                if target and hasattr(target, 'alive') and not target.alive:
+                    unit.target_enemy = None
+                    unit.attacking = False
+                elif target and hasattr(target, 'hp') and target.hp <= 0:
+                    unit.target_enemy = None
+                    unit.attacking = False
+                else:
+                    unit.try_attack(dt)
+            else:
+                # Auto-target: soldiers/tanks fire at enemies in range
+                if isinstance(unit, (Soldier, Tank)):
+                    target = unit.find_target(enemies)
+                    if target:
+                        unit.target_enemy = target
+                        unit.attacking = True
+                        unit.waypoints.clear()
+                        unit.fire_cooldown = 0.0
+                        unit.try_attack(dt)
+                        continue
+                if unit.waypoints:
+                    self._move_unit_with_avoidance(unit, dt)
+                else:
+                    unit.update(dt)
+
+        # Update enemy movement with avoidance
+        for enemy in enemies:
+            if not enemy.attacking and enemy.waypoints:
+                self._move_unit_with_avoidance(enemy, dt)
+
+        # Update buildings (production)
         for building in self.buildings:
             new_unit = building.update(dt)
             if new_unit is not None:
+                self._place_unit_at_free_spot(new_unit)
                 self.units.append(new_unit)
+
+        # Update wave manager (spawning, enemy AI, dead removal)
+        self.wave_manager.update(dt, self.units, self.buildings)
+
+        # Remove dead player units
+        dead_units = [u for u in self.units if not u.alive]
+        for u in dead_units:
+            if u in self.selected_units:
+                self.selected_units.remove(u)
+                u.selected = False
+            # Release mining node if worker
+            if isinstance(u, Worker):
+                u.cancel_mining()
+        self.units = [u for u in self.units if u.alive]
+
+        # Remove dead buildings
+        dead_buildings = [b for b in self.buildings if b.hp <= 0]
+        for b in dead_buildings:
+            if b is self.selected_building:
+                self.selected_building = None
+        self.buildings = [b for b in self.buildings if b.hp > 0]
+
+        # Check win/lose conditions
+        if self.wave_manager.is_victory():
+            self.game_over = True
+            self.game_result = "victory"
+        elif self.wave_manager.is_defeat(self.units, self.buildings):
+            self.game_over = True
+            self.game_result = "defeat"

@@ -18,6 +18,7 @@ class MineralNode:
         self.y = y
         self.remaining = amount
         self.max_amount = amount
+        self.mining_worker = None  # the worker currently mining this node
 
     @property
     def rect(self):

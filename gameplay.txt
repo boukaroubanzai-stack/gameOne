@@ -1,0 +1,48 @@
+general map specifications:
+-the windows size must be 1080x900 pixels
+-the game is over when 10 waves of enemies are destroyed by the player, or if the enemy destroy all player's units and building.
+-the first wave of enemies spawns 2 minutes after the game starts. subsequent waves spawn every 30 seconds.
+-the player starts with 1 town center, 3 workers and 50 ressources.
+-there are 5 mineral nodes placed on the map, each holding 2500 ressources.
+
+units specifications:
+
+All units fires at enemy as soon as they are in range. this makes the unit stop moving unless the player order them to start moving again.
+Units cannot use the same space at the same time.
+Units cannot spawn in a space used by an existing unit.
+
+the worker:
+-has 30 health points
+-cost 15 ressources to be built.
+-trained from the town center in 4 seconds.
+-carries 10 ressources per trip and mines for 2 seconds at a node.
+-delivers ressources at the edge of the building, not inside it.
+-only one worker can mine a node at a time, others wait for it to finish.
+
+the soldier:
+-has 100 health points
+-cost 100 ressources to be built.
+-trained from the barracks in 3 seconds.
+-Its gun fires 5 times a second and deals 10 HP of damage.
+-The firing range is 7 times the size of the unit.
+
+the tank:
+-has 500 health points
+-moves twice as slow as the soldier
+-cost 350 ressources to be built.
+-trained from the factory in 6 seconds.
+-Its cannon fires 1 round every second and deals 34 HP of damage.
+-The firing range is 7 times the size of the unit.
+
+buildings specifications:
+
+-buildings can be attacked and destroyed by enemies.
+-the town center costs 100 ressources to place.
+-the barracks costs 50 ressources to place.
+-the factory costs 80 ressources to place.
+
+A new unit called "Yanuses" is a soldier-like enemy unit:
+-same HP and damage as the soldier
+-spawns from the bottom of the map, starting as a group of 3 with one more enemy added each wave.
+-shoots the soldiers, the tanks and the building as soon as they are in range.
+-walks toward the nearest player unit or building when nothing is in range.

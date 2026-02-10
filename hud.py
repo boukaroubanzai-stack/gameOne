@@ -4,6 +4,7 @@ from settings import (
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
     SOLDIER_COST, TANK_COST, WORKER_COST,
+    TOTAL_WAVES,
 )
 
 # Accent colors for HUD buttons
@@ -31,10 +32,10 @@ class HUD:
         btn_w, btn_h = 100, 36
         y = MAP_HEIGHT + 15
         self.buttons = {
-            "towncenter": pygame.Rect(220, y, btn_w, btn_h),
-            "barracks": pygame.Rect(330, y, btn_w, btn_h),
-            "factory": pygame.Rect(440, y, btn_w, btn_h),
-            "train": pygame.Rect(600, y, 120, btn_h),
+            "towncenter": pygame.Rect(280, y, btn_w, btn_h),
+            "barracks": pygame.Rect(390, y, btn_w, btn_h),
+            "factory": pygame.Rect(500, y, btn_w, btn_h),
+            "train": pygame.Rect(660, y, 120, btn_h),
         }
 
     def handle_click(self, pos, game_state):
@@ -73,6 +74,15 @@ class HUD:
         surface.blit(self.font.render(res_text, True, (255, 215, 0)),
                      (15, MAP_HEIGHT + 10))
 
+        # Wave info
+        wm = game_state.wave_manager
+        wave_text = f"Wave: {wm.waves_completed}/{TOTAL_WAVES}"
+        surface.blit(self.font.render(wave_text, True, (200, 200, 255)),
+                     (15, MAP_HEIGHT + 34))
+        enemies_text = f"Enemies: {len(wm.enemies)}"
+        surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
+                     (15, MAP_HEIGHT + 56))
+
         # Build buttons
         self._draw_button(surface, self.buttons["towncenter"],
                           f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
@@ -93,7 +103,7 @@ class HUD:
         # Selected building info
         sb = game_state.selected_building
         if sb:
-            info_x = 570
+            info_x = 630
             surface.blit(self.font.render(f"Selected: {sb.label}", True, HUD_TEXT),
                          (info_x, MAP_HEIGHT + 10))
             # Train button
@@ -121,9 +131,9 @@ class HUD:
             count = len(game_state.selected_units)
             info_text = f"Selected: {count} unit{'s' if count > 1 else ''}"
             surface.blit(self.font.render(info_text, True, HUD_TEXT),
-                         (570, MAP_HEIGHT + 10))
+                         (630, MAP_HEIGHT + 10))
             surface.blit(self.small_font.render("RClick: Move | RClick mineral: Mine", True, (150, 150, 150)),
-                         (570, MAP_HEIGHT + 35))
+                         (630, MAP_HEIGHT + 35))
 
         # Controls help
         help_text = "T: Town Center | B: Barracks | F: Factory | LClick: Select | RClick: Move/Mine | ESC: Cancel"

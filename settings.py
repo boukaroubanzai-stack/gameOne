@@ -1,6 +1,6 @@
 # Screen
-WIDTH = 1024
-HEIGHT = 768
+WIDTH = 1080
+HEIGHT = 900
 FPS = 60
 HUD_HEIGHT = 120
 
@@ -33,7 +33,7 @@ TOWN_CENTER_SPRITE = os.path.join(ASSETS_DIR, "towncenter.png")
 STARTING_RESOURCES = 50
 
 # Mineral nodes
-MINERAL_NODE_AMOUNT = 500
+MINERAL_NODE_AMOUNT = 2500
 MINERAL_NODE_SIZE = 16  # radius
 MINERAL_NODE_COLOR = (50, 150, 255)
 
@@ -48,18 +48,39 @@ WORKER_MINE_TIME = 2.0  # seconds to fill up at a node
 STARTING_WORKERS = 3
 
 # Soldier
-SOLDIER_COST = 25
-SOLDIER_HP = 50
+SOLDIER_COST = 100
+SOLDIER_HP = 100
 SOLDIER_SPEED = 120  # pixels per second
 SOLDIER_SIZE = 16  # half-width
 SOLDIER_TRAIN_TIME = 3.0  # seconds
+SOLDIER_FIRE_RATE = 5.0  # shots per second
+SOLDIER_DAMAGE = 10
+SOLDIER_RANGE = SOLDIER_SIZE * 7  # firing range
 
 # Tank
-TANK_COST = 60
-TANK_HP = 150
-TANK_SPEED = 60  # pixels per second
+TANK_COST = 350
+TANK_HP = 500
+TANK_SPEED = SOLDIER_SPEED // 2  # twice as slow as soldier
 TANK_SIZE = 20  # half-width
 TANK_TRAIN_TIME = 6.0  # seconds
+TANK_FIRE_RATE = 1.0  # shots per second
+TANK_DAMAGE = 34
+TANK_RANGE = TANK_SIZE * 7  # firing range
+
+# Yanuses (enemy)
+YANUSES_HP = 100
+YANUSES_SPEED = 80
+YANUSES_SIZE = 16
+YANUSES_FIRE_RATE = 5.0
+YANUSES_DAMAGE = 10
+YANUSES_RANGE = YANUSES_SIZE * 7
+YANUSES_SPRITE = os.path.join(ASSETS_DIR, "yanuses.png")
+
+# Waves
+TOTAL_WAVES = 10
+FIRST_WAVE_DELAY = 120.0  # seconds before first wave (2 minutes)
+WAVE_INTERVAL = 30.0  # seconds between waves
+YANUSES_PER_WAVE = 3  # enemies per wave
 
 # Town Center
 TOWN_CENTER_COST = 100
