@@ -1,5 +1,6 @@
 import pygame
 import sys
+import datetime
 from settings import (
     WIDTH, HEIGHT, FPS, MAP_COLOR, MAP_HEIGHT, DRAG_BOX_COLOR,
     BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE,
@@ -8,6 +9,79 @@ from game_state import GameState
 from hud import HUD
 from units import Soldier, Tank, Worker, Yanuses
 from buildings import Barracks, Factory, TownCenter
+
+
+def _write_debug_log(state):
+    """Write full game state to dbug.log."""
+    lines = []
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines.append(f"=== DEBUG LOG - {now} ===")
+    lines.append("")
+
+    # Game status
+    lines.append(f"Game Over: {state.game_over}  Result: {state.game_result}")
+    lines.append(f"Resources: {state.resource_manager.amount:.1f}")
+    lines.append(f"Placement Mode: {state.placement_mode}")
+    lines.append("")
+
+    # Wave info
+    wm = state.wave_manager
+    lines.append(f"--- WAVES ---")
+    lines.append(f"Current Wave: {wm.current_wave}  Completed: {wm.waves_completed}")
+    lines.append(f"Wave Active: {wm.wave_active}  Wave Timer: {wm.wave_timer:.1f}s")
+    lines.append(f"Enemies Alive: {len(wm.enemies)}")
+    lines.append("")
+
+    # Buildings
+    lines.append(f"--- BUILDINGS ({len(state.buildings)}) ---")
+    for i, b in enumerate(state.buildings):
+        queue_len = len(b.production_queue)
+        lines.append(f"  [{i}] {b.label} at ({b.x}, {b.y}) HP={b.hp}/{b.max_hp} "
+                      f"Queue={queue_len} Selected={b.selected}")
+    lines.append("")
+
+    # Player units
+    lines.append(f"--- PLAYER UNITS ({len(state.units)}) ---")
+    for i, u in enumerate(state.units):
+        wp = len(u.waypoints)
+        base = (f"  [{i}] {u.name} at ({u.x:.0f}, {u.y:.0f}) HP={u.hp}/{u.max_hp} "
+                f"Speed={u.speed} WP={wp} Attacking={u.attacking} Stuck={u.stuck} "
+                f"Selected={u.selected}")
+        if isinstance(u, Worker):
+            base += f" State={u.state} Carry={u.carry_amount}"
+        if u.attack_range > 0:
+            target_info = "None"
+            if u.target_enemy:
+                t = u.target_enemy
+                target_info = f"{getattr(t, 'name', 'Building')} HP={t.hp}"
+            base += f" Dmg={u.damage} Rate={u.fire_rate} Range={u.attack_range} Target={target_info}"
+        lines.append(base)
+    lines.append("")
+
+    # Enemies
+    lines.append(f"--- ENEMIES ({len(wm.enemies)}) ---")
+    for i, e in enumerate(wm.enemies):
+        wp = len(e.waypoints)
+        target_info = "None"
+        if e.target_enemy:
+            t = e.target_enemy
+            target_info = f"{getattr(t, 'name', 'Building')} HP={t.hp}"
+        lines.append(f"  [{i}] {e.name} at ({e.x:.0f}, {e.y:.0f}) HP={e.hp}/{e.max_hp} "
+                      f"WP={wp} Attacking={e.attacking} Stuck={e.stuck} Target={target_info}")
+    lines.append("")
+
+    # Mineral nodes
+    lines.append(f"--- MINERAL NODES ({len(state.mineral_nodes)}) ---")
+    for i, n in enumerate(state.mineral_nodes):
+        miner = n.mining_worker
+        miner_info = f"Worker at ({miner.x:.0f}, {miner.y:.0f})" if miner else "None"
+        lines.append(f"  [{i}] ({n.x}, {n.y}) Remaining={n.remaining}/{n.max_amount} "
+                      f"Depleted={n.depleted} Mining={miner_info}")
+    lines.append("")
+    lines.append("=== END DEBUG LOG ===")
+
+    with open("dbug.log", "w") as f:
+        f.write("\n".join(lines))
 
 
 def main():
@@ -31,6 +105,7 @@ def main():
     dragging = False
     drag_start = None
     drag_rect = None
+    paused = False
 
     running = True
     while running:
@@ -46,14 +121,22 @@ def main():
                     running = False
                 continue
 
+            # Debug pause: B to pause + write log, ESC to resume
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_b:
+                paused = True
+                _write_debug_log(state)
+                continue
+            if paused:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    paused = False
+                continue
+
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if state.placement_mode:
                         state.placement_mode = None
                     else:
                         state.deselect_all()
-                elif event.key == pygame.K_b:
-                    state.placement_mode = "barracks"
                 elif event.key == pygame.K_f:
                     state.placement_mode = "factory"
                 elif event.key == pygame.K_t:
@@ -145,7 +228,8 @@ def main():
                     drag_rect = pygame.Rect(x, y, w, h)
 
         # Update
-        state.update(dt)
+        if not paused:
+            state.update(dt)
 
         # Draw
         screen.fill(MAP_COLOR)
@@ -218,6 +302,20 @@ def main():
 
         # Draw HUD
         hud.draw(screen, state)
+
+        # Paused overlay
+        if paused:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            screen.blit(overlay, (0, 0))
+            big_font = pygame.font.SysFont(None, 72)
+            small_font = pygame.font.SysFont(None, 32)
+            text = big_font.render("PAUSED", True, (255, 255, 100))
+            text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))
+            screen.blit(text, text_rect)
+            sub = small_font.render("dbug.log written  |  Press ESC to resume", True, (200, 200, 200))
+            sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
+            screen.blit(sub, sub_rect)
 
         # Game over overlay
         if state.game_over:

@@ -88,7 +88,7 @@ class HUD:
                           f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(TOWN_CENTER_COST))
         self._draw_button(surface, self.buttons["barracks"],
-                          f"Barracks [B] ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
+                          f"Barracks ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(BARRACKS_COST))
         self._draw_button(surface, self.buttons["factory"],
                           f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
@@ -175,7 +175,7 @@ class HUD:
                              (info_x, MAP_HEIGHT + 48))
 
         # Controls help
-        help_text = "T: Town Center | B: Barracks | F: Factory | LClick: Select | RClick: Move/Mine | ESC: Cancel"
+        help_text = "T: Town Center | F: Factory | B: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
         surface.blit(self.small_font.render(help_text, True, (120, 120, 120)),
                      (15, MAP_HEIGHT + HUD_HEIGHT - 22))
 

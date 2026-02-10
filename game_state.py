@@ -241,14 +241,30 @@ class GameState:
                 unit.waypoints.pop(0)
                 return
 
-        # If stuck, try moving left (perpendicular to facing direction) to get unstuck
-        px, py = -ny, nx  # left direction relative to facing
+        px, py = -ny, nx  # perpendicular (left)
+
+        # If stuck too long, give up and clear waypoint
+        if unit.stuck_timer > 2.0:
+            unit.waypoints.pop(0)
+            return
+
+        # If stuck, try escaping in multiple directions (left, right, back-left, back-right)
         if unit.stuck:
-            left_x = unit.x + px * move
-            left_y = unit.y + py * move
-            if not self._collides_with_other(unit, left_x, left_y):
-                unit.x, unit.y = left_x, left_y
-                return
+            escape_dirs = [
+                (px, py),                             # left
+                (-px, -py),                           # right
+                (px * 0.7 - nx * 0.7, py * 0.7 - ny * 0.7),  # back-left
+                (-px * 0.7 - nx * 0.7, -py * 0.7 - ny * 0.7),  # back-right
+            ]
+            for ex, ey in escape_dirs:
+                elen = math.hypot(ex, ey)
+                if elen > 0:
+                    ex, ey = ex / elen, ey / elen
+                esc_x = unit.x + ex * move
+                esc_y = unit.y + ey * move
+                if not self._collides_with_other(unit, esc_x, esc_y):
+                    unit.x, unit.y = esc_x, esc_y
+                    return
 
         # Try direct path first
         blocker_on_path = self._collides_with_other(unit, new_x, new_y)
@@ -261,15 +277,13 @@ class GameState:
         if blocker_is_moving and id(unit) < id(blocker_on_path):
             return  # wait for the higher-priority unit to steer around
 
-        # Try steering around the blocker (perpendicular)
+        # Try steering around the blocker (left, right, diagonals)
         for sign in (1, -1):
             alt_x = unit.x + px * move * sign
             alt_y = unit.y + py * move * sign
             if not self._collides_with_other(unit, alt_x, alt_y):
                 unit.x, unit.y = alt_x, alt_y
                 return
-
-        # Try diagonals (45 degrees off the main direction)
         for sign in (1, -1):
             diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
             diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
