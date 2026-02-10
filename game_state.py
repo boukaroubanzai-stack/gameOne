@@ -224,6 +224,23 @@ class GameState:
         new_x = unit.x + nx * move
         new_y = unit.y + ny * move
 
+        # Check if the destination itself is occupied by a stationary unit
+        blocker = self._collides_with_other(unit, tx, ty)
+        if blocker:
+            # If we're close enough to the blocker, stop next to it
+            dist_to_blocker = math.hypot(unit.x - blocker.x, unit.y - blocker.y)
+            stop_dist = unit.size + blocker.size + 2
+            if dist_to_blocker <= stop_dist + move:
+                # Place unit adjacent to the blocker
+                bx = unit.x - blocker.x
+                by = unit.y - blocker.y
+                bdist = math.hypot(bx, by)
+                if bdist > 0:
+                    unit.x = blocker.x + (bx / bdist) * stop_dist
+                    unit.y = blocker.y + (by / bdist) * stop_dist
+                unit.waypoints.pop(0)
+                return
+
         # Try direct path first
         if not self._collides_with_other(unit, new_x, new_y):
             unit.x, unit.y = new_x, new_y

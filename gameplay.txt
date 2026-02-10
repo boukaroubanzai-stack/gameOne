@@ -1,5 +1,5 @@
 general map specifications:
--the windows size must be 1080x900 pixels
+-the windows size must be 2000x1200 pixels
 -the game is over when 10 waves of enemies are destroyed by the player, or if the enemy destroy all player's units and building.
 -the first wave of enemies spawns 2 minutes after the game starts. subsequent waves spawn every 30 seconds.
 -the player starts with 1 town center, 3 workers and 50 ressources.
