@@ -10,6 +10,8 @@ units specifications:
 All units fires at enemy as soon as they are in range. this makes the unit stop moving unless the player order them to start moving again.
 Units cannot use the same space at the same time.
 Units cannot spawn in a space used by an existing unit.
+When a moving unit reaches a destination occupied by another unit, it stops next to it.
+When two moving units collide, one stops and waits until the other has moved away.
 
 the worker:
 -has 30 health points
