@@ -12,6 +12,9 @@ Units cannot use the same space at the same time.
 Units cannot spawn in a space used by an existing unit.
 When a moving unit reaches a destination occupied by another unit, it stops next to it.
 When two moving units collide, one stops and waits until the other has moved away.
+When a unit is stuck for more than 0.5 second, it enters a "stuck" state and tries to escape by moving left, right, back-left or back-right.
+When a unit is stuck for more than 2 seconds, it gives up and stops.
+When a unit is selected, all its stats are displayed in the bottom panel.
 
 the worker:
 -has 30 health points
@@ -48,3 +51,15 @@ A new unit called "Yanuses" is a soldier-like enemy unit:
 -spawns from the bottom of the map, starting as a group of 3 with one more enemy added each wave.
 -shoots the soldiers, the tanks and the building as soon as they are in range.
 -walks toward the nearest player unit or building when nothing is in range.
+
+controls:
+
+-T: enter town center placement mode.
+-F: enter factory placement mode.
+-B: pause the game and generate a dbug.log file with the full game state. press ESC to resume.
+-Left click: place building, select unit or building.
+-Left drag: box-select units.
+-Right click on ground: move selected units.
+-Right click on mineral node: send selected workers to mine.
+-Shift + Right click: add waypoint to path.
+-ESC: cancel placement, deselect, resume from pause, quit on game over.
