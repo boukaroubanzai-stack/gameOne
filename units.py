@@ -245,6 +245,10 @@ class Worker(Unit):
     def update_state(self, dt):
         """Run mining state transitions (called by game_state when movement is handled externally)."""
         if self.state == "moving_to_mine":
+            # Check if drop-off building was destroyed
+            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+                self.cancel_mining()
+                return
             # Check if close enough to the node (arrival or blocked nearby)
             if not self.assigned_node or self.assigned_node.depleted:
                 self.cancel_mining()
@@ -263,6 +267,9 @@ class Worker(Unit):
                     self.state = "waiting"
 
         elif self.state == "waiting":
+            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+                self.cancel_mining()
+                return
             if not self.assigned_node or self.assigned_node.depleted:
                 self.cancel_mining()
             elif self.assigned_node.mining_worker is None:
@@ -272,6 +279,12 @@ class Worker(Unit):
                 self.mine_timer = 0.0
 
         elif self.state == "mining":
+            # Check if drop-off building was destroyed
+            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+                if self.assigned_node and self.assigned_node.mining_worker is self:
+                    self.assigned_node.mining_worker = None
+                self.cancel_mining()
+                return
             self.mine_timer += dt
             if self.mine_timer >= WORKER_MINE_TIME:
                 self.carry_amount = self.assigned_node.mine(WORKER_CARRY_CAPACITY)
@@ -293,13 +306,13 @@ class Worker(Unit):
                 self.waypoints = [(edge_x, edge_y)]
 
         elif self.state == "returning":
-            # Deposit when close to the building edge
+            # Check if drop-off building was destroyed
             bld = self.drop_off_building
-            if bld:
-                bld_rect = bld.rect.inflate(self.size * 2, self.size * 2)
-                near_building = bld_rect.collidepoint(int(self.x), int(self.y))
-            else:
-                near_building = not self.waypoints
+            if not bld or bld.hp <= 0:
+                self.cancel_mining()
+                return
+            bld_rect = bld.rect.inflate(self.size * 2, self.size * 2)
+            near_building = bld_rect.collidepoint(int(self.x), int(self.y))
             if near_building or not self.waypoints:
                 self.waypoints.clear()
                 if self.resource_manager and self.carry_amount > 0:
