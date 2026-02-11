@@ -18,6 +18,7 @@ minimap:
 units specifications:
 
 All units fires at enemy as soon as they are in range. after the fight is over, units resume moving to their waypoint.
+When a combat unit is selected, a circle showing its attack range is displayed around it.
 Units cannot use the same space at the same time.
 Units cannot spawn in a space used by an existing unit.
 When a moving unit reaches a destination occupied by another unit, it stops next to it.
@@ -87,6 +88,14 @@ AI profile "defensive":
 -keeps 50% of army garrisoned at base for defense.
 -retreats sooner when outnumbered (40% ratio).
 -builds up to 6 defense towers near existing buildings.
+
+AI profile "aggressive":
+-thinks twice as fast (every 0.5 seconds).
+-trains only 5 workers, prioritizing military spending.
+-attacks early with just 3 combat units (half the basic threshold).
+-sends 90% of army to attack, keeping only 10% garrisoned.
+-barely retreats (only at 15% ratio), heavily favors soldiers (5:1 ratio).
+-keeps minimal resource reserve (30).
 
 A new unit called "Yanuses" is an evil soldier-like enemy unit:
 -same HP and damage as the soldier
