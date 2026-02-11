@@ -2,7 +2,7 @@ import pygame
 from settings import (
     WIDTH, HEIGHT, HUD_HEIGHT, MAP_HEIGHT,
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
     SOLDIER_COST, TANK_COST, WORKER_COST,
     TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL,
 )
@@ -14,6 +14,7 @@ TOWN_CENTER_ACCENT = (60, 140, 60)
 SOLDIER_ACCENT = (50, 120, 220)
 TANK_ACCENT = (100, 100, 100)
 WORKER_ACCENT = (180, 140, 60)
+TOWER_ACCENT = (120, 120, 140)
 
 
 class HUD:
@@ -35,7 +36,8 @@ class HUD:
             "towncenter": pygame.Rect(280, y, btn_w, btn_h),
             "barracks": pygame.Rect(390, y, btn_w, btn_h),
             "factory": pygame.Rect(500, y, btn_w, btn_h),
-            "train": pygame.Rect(660, y, 120, btn_h),
+            "tower": pygame.Rect(610, y, btn_w, btn_h),
+            "train": pygame.Rect(770, y, 120, btn_h),
         }
 
     def handle_click(self, pos, game_state):
@@ -50,6 +52,9 @@ class HUD:
             return True
         if self.buttons["factory"].collidepoint(pos):
             game_state.placement_mode = "factory"
+            return True
+        if self.buttons["tower"].collidepoint(pos):
+            game_state.placement_mode = "tower"
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
@@ -115,6 +120,9 @@ class HUD:
         self._draw_button(surface, self.buttons["factory"],
                           f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(FACTORY_COST))
+        self._draw_button(surface, self.buttons["tower"],
+                          f"Tower [D] ${TOWER_COST}", TOWER_ACCENT, mouse_pos,
+                          game_state.resource_manager.can_afford(TOWER_COST))
 
         # Placement mode indicator
         if game_state.placement_mode:
@@ -125,28 +133,40 @@ class HUD:
         # Selected building info
         sb = game_state.selected_building
         if sb:
-            info_x = 630
+            info_x = 740
             surface.blit(self.font.render(f"Selected: {sb.label}", True, HUD_TEXT),
                          (info_x, MAP_HEIGHT + 10))
-            # Train button
-            unit_class, cost, _ = sb.can_train()
-            train_label = f"Train {unit_class.name} ${cost}"
-            can_afford = game_state.resource_manager.can_afford(cost)
-            if unit_class.name == "Worker":
-                accent = WORKER_ACCENT
-            elif unit_class.name == "Soldier":
-                accent = SOLDIER_ACCENT
+            # Check if this is a DefenseTower (has combat attributes, no production)
+            from buildings import DefenseTower
+            if isinstance(sb, DefenseTower):
+                # Show combat stats instead of train button
+                surface.blit(self.small_font.render(
+                    f"Damage: {sb.damage}  Rate: {sb.fire_rate}/s  Range: {sb.attack_range}",
+                    True, HUD_TEXT), (info_x, MAP_HEIGHT + 30))
+                status = "Attacking" if sb.attacking else "Idle"
+                status_color = (255, 150, 150) if sb.attacking else (150, 200, 150)
+                surface.blit(self.small_font.render(f"Status: {status}", True, status_color),
+                             (info_x, MAP_HEIGHT + 48))
             else:
-                accent = TANK_ACCENT
-            self._draw_button(surface, self.buttons["train"],
-                              train_label, accent, mouse_pos, can_afford)
-            # Queue info
-            queue_len = len(sb.production_queue)
-            if queue_len > 0:
-                prog = sb.production_progress
-                queue_text = f"Queue: {queue_len} | Progress: {int(prog * 100)}%"
-                surface.blit(self.small_font.render(queue_text, True, HUD_TEXT),
-                             (info_x, MAP_HEIGHT + 58))
+                # Train button
+                unit_class, cost, _ = sb.can_train()
+                train_label = f"Train {unit_class.name} ${cost}"
+                can_afford = game_state.resource_manager.can_afford(cost)
+                if unit_class.name == "Worker":
+                    accent = WORKER_ACCENT
+                elif unit_class.name == "Soldier":
+                    accent = SOLDIER_ACCENT
+                else:
+                    accent = TANK_ACCENT
+                self._draw_button(surface, self.buttons["train"],
+                                  train_label, accent, mouse_pos, can_afford)
+                # Queue info
+                queue_len = len(sb.production_queue)
+                if queue_len > 0:
+                    prog = sb.production_progress
+                    queue_text = f"Queue: {queue_len} | Progress: {int(prog * 100)}%"
+                    surface.blit(self.small_font.render(queue_text, True, HUD_TEXT),
+                                 (info_x, MAP_HEIGHT + 58))
 
         # Selected units info
         elif game_state.selected_units:
@@ -197,7 +217,7 @@ class HUD:
                              (info_x, MAP_HEIGHT + 48))
 
         # Controls help
-        help_text = "T: Town Center | B: Barracks | F: Factory | P: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
+        help_text = "T: Town Center | B: Barracks | F: Factory | D: Tower | P: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
         surface.blit(self.small_font.render(help_text, True, (120, 120, 120)),
                      (15, MAP_HEIGHT + HUD_HEIGHT - 22))
 

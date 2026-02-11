@@ -277,6 +277,11 @@ class Worker(Unit):
                 self.assigned_node.mining_worker = self
                 self.state = "mining"
                 self.mine_timer = 0.0
+            elif not self.assigned_node.mining_worker.alive:
+                # Mining worker died — release the node and claim it
+                self.assigned_node.mining_worker = self
+                self.state = "mining"
+                self.mine_timer = 0.0
 
         elif self.state == "mining":
             # Check if drop-off building was destroyed

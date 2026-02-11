@@ -1,15 +1,9 @@
 import pygame
-from settings import MINERAL_NODE_AMOUNT, MINERAL_NODE_SIZE, MINERAL_NODE_COLOR
+from settings import MINERAL_NODE_AMOUNT, MINERAL_NODE_SIZE, MINERAL_NODE_COLOR, MINERAL_OFFSETS, PLAYER_TC_POS
 
 
-# Fixed positions for 5 mineral nodes, spread across the map
-MINERAL_POSITIONS = [
-    (200, 100),
-    (800, 80),
-    (500, 300),
-    (150, 500),
-    (850, 450),
-]
+# Player mineral positions: TC position + shared offsets (spread to the right)
+MINERAL_POSITIONS = [(PLAYER_TC_POS[0] + dx, PLAYER_TC_POS[1] + dy) for dx, dy in MINERAL_OFFSETS]
 
 
 class MineralNode:

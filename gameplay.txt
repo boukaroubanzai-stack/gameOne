@@ -1,9 +1,18 @@
 general map specifications:
 -the windows size must be 2000x1200 pixels
+-the world map is 10000x5400 pixels, scrollable via camera.
+-the camera scrolls when the mouse reaches the screen edge (30px margin) or using arrow keys.
 -the game is over when 10 waves of enemies are destroyed by the player, or if the enemy destroy all player's units and building.
 -the first wave of enemies spawns 2 minutes after the game starts. subsequent waves spawn every 30 seconds.
 -the player starts with 1 town center, 3 workers and 50 ressources.
--there are 5 mineral nodes placed on the map, each holding 2500 ressources.
+-there are 10 mineral nodes spread across the left/center of the map, each holding 2500 ressources.
+
+minimap:
+-a minimap is displayed in the HUD area (bottom-right corner).
+-it shows all units, buildings, mineral nodes, enemies, and AI entities.
+-a white rectangle on the minimap indicates the current camera viewport.
+-clicking on the minimap moves the viewport to that location.
+-click-dragging on the minimap smoothly pans the camera.
 
 units specifications:
 
@@ -23,6 +32,7 @@ the worker:
 -carries 10 ressources per trip and mines for 2 seconds at a node.
 -delivers ressources at the edge of the building, not inside it.
 -only one worker can mine a node at a time, others wait for it to finish.
+-if the drop-off town center is destroyed, the worker cancels mining.
 
 the soldier:
 -has 100 health points
@@ -45,6 +55,25 @@ buildings specifications:
 -the town center costs 100 ressources to place.
 -the barracks costs 50 ressources to place.
 -the factory costs 80 ressources to place.
+-the defense tower costs 150 ressources to place.
+
+the defense tower:
+-has 300 health points.
+-does not produce units.
+-automatically targets and fires at enemies within range (200 pixels).
+-fires 1.5 shots per second, dealing 25 HP of damage.
+-displays a rotating cannon barrel pointing at its target (or upward when idle).
+-shows its attack range circle when selected.
+
+AI computer player:
+-an AI opponent occupies the right side of the map (town center at ~8000, 280).
+-has its own set of 10 mineral nodes, workers, buildings, and combat units.
+-all AI entities are drawn with an orange tint to distinguish them from the player.
+-follows a build order: workers first, then barracks, then factory, then 2nd town center.
+-trains up to 8 workers, maintains a 3:1 soldier/tank ratio.
+-scouts before attacking, sends 70% of army to attack while 30% garrisons.
+-uses focus fire and retreats when army drops below 30%.
+-thinks every 1 second and adapts difficulty based on game progression.
 
 A new unit called "Yanuses" is an evil soldier-like enemy unit:
 -same HP and damage as the soldier
@@ -52,15 +81,24 @@ A new unit called "Yanuses" is an evil soldier-like enemy unit:
 -shoots the soldiers, the tanks and the building as soon as they are in range.
 -walks toward the nearest player unit or building when nothing is in range.
 
+natural disasters:
+-random disasters spawn every 45-90 seconds, affecting all units and buildings on the map.
+-meteor strike: 0.5s warning (crosshair), then explosion dealing 50 damage in a 150px radius with particle effects.
+-earthquake: lasts 5 seconds, shakes the screen, deals 10 damage to all buildings, slows all units by 50%.
+-lightning storm: lasts 8 seconds, random bolts strike units every 1-2 seconds for 40 damage (10 splash within 30px).
+-toxic cloud: drifts across the map for 12 seconds, deals 5 damage per second to units within a 200px radius.
+
 controls:
 
 -T: enter town center placement mode.
 -B: enter barracks placement mode.
 -F: enter factory placement mode.
+-D: enter defense tower placement mode.
 -P: pause the game and generate a dbug.log file with the full game state. press ESC to resume.
--Left click: place building, select unit or building.
--Left drag: box-select units.
+-Left click: place building, select unit or building, click minimap to move viewport.
+-Left drag: box-select units, drag on minimap to pan camera.
 -Right click on ground: move selected units.
 -Right click on mineral node: send selected workers to mine.
 -Shift + Right click: add waypoint to path.
+-Arrow keys: scroll the camera.
 -ESC: cancel placement, deselect, resume from pause, quit on game over.

@@ -2,19 +2,20 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter
+from buildings import Barracks, Factory, TownCenter, DefenseTower
 from units import Worker, Soldier, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
 from ai_player import AIPlayer
 from settings import (
-    MAP_HEIGHT, WIDTH, STARTING_WORKERS,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
+    WORLD_W, WORLD_H, STARTING_WORKERS,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
+    PLAYER_TC_POS,
 )
 
 
 class GameState:
-    def __init__(self):
+    def __init__(self, ai_profile=None):
         self.resource_manager = ResourceManager()
         self.buildings = []
         self.units = []
@@ -23,7 +24,7 @@ class GameState:
         self.selected_building = None
         self.placement_mode = None  # None, "barracks", "factory", "towncenter"
         self.wave_manager = WaveManager()
-        self.ai_player = AIPlayer()
+        self.ai_player = AIPlayer(profile=ai_profile)
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
 
@@ -35,7 +36,7 @@ class GameState:
             self.mineral_nodes.append(MineralNode(x, y))
 
         # Place starting Town Center
-        tc = TownCenter(100, 280)
+        tc = TownCenter(PLAYER_TC_POS[0], PLAYER_TC_POS[1])
         self.buildings.append(tc)
 
         # Spawn starting workers near the Town Center
@@ -117,13 +118,15 @@ class GameState:
             b = Factory(x, y)
         elif self.placement_mode == "towncenter":
             b = TownCenter(x, y)
+        elif self.placement_mode == "tower":
+            b = DefenseTower(x, y)
         else:
             return False
 
-        # Check building fits within map area
-        if b.rect.bottom > MAP_HEIGHT or b.rect.top < 0:
+        # Check building fits within world area
+        if b.rect.bottom > WORLD_H or b.rect.top < 0:
             return False
-        if b.rect.left < 0 or b.rect.right > WIDTH:
+        if b.rect.left < 0 or b.rect.right > WORLD_W:
             return False
 
         # Check not overlapping existing buildings (player + AI)
@@ -150,6 +153,8 @@ class GameState:
             return FACTORY_COST
         elif self.placement_mode == "towncenter":
             return TOWN_CENTER_COST
+        elif self.placement_mode == "tower":
+            return TOWER_COST
         return 0
 
     def command_move(self, pos):
@@ -173,9 +178,9 @@ class GameState:
                         continue
                     nx = unit.x + dx * spacing
                     ny = unit.y + dy * spacing
-                    if nx < unit.size or nx > WIDTH - unit.size:
+                    if nx < unit.size or nx > WORLD_W - unit.size:
                         continue
-                    if ny < unit.size or ny > MAP_HEIGHT - unit.size:
+                    if ny < unit.size or ny > WORLD_H - unit.size:
                         continue
                     if not self._collides_with_other(unit, nx, ny):
                         unit.x, unit.y = nx, ny
@@ -246,7 +251,7 @@ class GameState:
         px, py = -ny, nx  # perpendicular (left)
 
         # If stuck too long, give up and clear waypoint
-        if unit.stuck_timer > 2.0:
+        if unit.stuck_timer > 1.0:
             unit.waypoints.pop(0)
             return
 
@@ -316,14 +321,24 @@ class GameState:
             elif unit.attacking:
                 # Combat unit attacking — check target still valid
                 target = unit.target_enemy
-                if target and hasattr(target, 'alive') and not target.alive:
-                    unit.target_enemy = None
+                if not target:
                     unit.attacking = False
-                elif target and hasattr(target, 'hp') and target.hp <= 0:
+                elif (hasattr(target, 'alive') and not target.alive) or \
+                     (hasattr(target, 'hp') and target.hp <= 0):
                     unit.target_enemy = None
                     unit.attacking = False
                 else:
-                    unit.try_attack(dt)
+                    # Check target still in range
+                    if hasattr(target, 'size'):
+                        tx, ty = target.x, target.y
+                    else:
+                        tx, ty = target.x + target.w // 2, target.y + target.h // 2
+                    if unit.distance_to(tx, ty) <= unit.attack_range:
+                        unit.try_attack(dt)
+                    else:
+                        # Target moved out of range — disengage
+                        unit.target_enemy = None
+                        unit.attacking = False
             else:
                 # Auto-target: soldiers/tanks fire at enemies AND AI units in range
                 if isinstance(unit, (Soldier, Tank)):
@@ -331,7 +346,6 @@ class GameState:
                     if target:
                         unit.target_enemy = target
                         unit.attacking = True
-                        unit.waypoints.clear()
                         unit.fire_cooldown = 0.0
                         unit.try_attack(dt)
                         continue
@@ -372,12 +386,15 @@ class GameState:
             unit._last_x = unit.x
             unit._last_y = unit.y
 
-        # Update buildings (production)
+        # Update buildings (production + tower combat)
         for building in self.buildings:
-            new_unit = building.update(dt)
-            if new_unit is not None:
-                self._place_unit_at_free_spot(new_unit)
-                self.units.append(new_unit)
+            if isinstance(building, DefenseTower):
+                building.combat_update(dt, all_hostiles)
+            else:
+                new_unit = building.update(dt)
+                if new_unit is not None:
+                    self._place_unit_at_free_spot(new_unit)
+                    self.units.append(new_unit)
 
         # Update wave manager (spawning, enemy AI against player + AI player)
         self.wave_manager.update(dt, self.units, self.buildings)
@@ -405,7 +422,11 @@ class GameState:
         self.buildings = [b for b in self.buildings if b.hp > 0]
 
         # Check win/lose conditions
-        if self.wave_manager.is_victory():
+        # Victory: AI has no buildings and no combat units left
+        ai_alive_buildings = [b for b in self.ai_player.buildings if b.hp > 0]
+        ai_alive_combat = [u for u in self.ai_player.units
+                           if isinstance(u, (Soldier, Tank)) and u.alive]
+        if not ai_alive_buildings and not ai_alive_combat:
             self.game_over = True
             self.game_result = "victory"
         elif self.wave_manager.is_defeat(self.units, self.buildings):

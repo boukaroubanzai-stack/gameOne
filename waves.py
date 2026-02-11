@@ -1,7 +1,7 @@
 import random
 from units import Yanuses
 from settings import (
-    WIDTH, MAP_HEIGHT,
+    WORLD_W, WORLD_H,
     TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL, YANUSES_PER_WAVE, YANUSES_SIZE,
 )
 
@@ -17,15 +17,20 @@ class WaveManager:
 
     def spawn_wave(self):
         """Spawn a group of Yanuses at the bottom of the map. Each wave adds one more enemy."""
+        # TODO: Yanuses waves temporarily disabled
+        self.wave_active = False
+        self.current_wave += 1
+        self.waves_completed += 1
+        return
         count = YANUSES_PER_WAVE + self.current_wave  # wave 0 = 3, wave 1 = 4, etc.
         margin = YANUSES_SIZE * 2
         spacing = 60
-        # Center the group horizontally
-        start_x = random.randint(margin + 100, WIDTH - margin - 100)
-        y = MAP_HEIGHT - margin
+        # Center the group horizontally across the world width
+        start_x = random.randint(margin + 100, WORLD_W - margin - 100)
+        y = WORLD_H - margin
         for i in range(count):
             x = start_x + (i - count // 2) * spacing
-            x = max(margin, min(x, WIDTH - margin))
+            x = max(margin, min(x, WORLD_W - margin))
             enemy = Yanuses(x, y)
             self.enemies.append(enemy)
         self.wave_active = True
@@ -55,6 +60,8 @@ class WaveManager:
 
     def is_victory(self):
         """Player wins when all 10 waves are completed and no enemies remain."""
+        # TODO: Victory condition temporarily disabled (Yanuses disabled)
+        return False
         return self.waves_completed >= TOTAL_WAVES and not self.enemies
 
     def is_defeat(self, player_units, buildings):

@@ -1,11 +1,19 @@
-# Screen
+# Screen (viewport)
 WIDTH = 2000
 HEIGHT = 1200
 FPS = 60
 HUD_HEIGHT = 120
 
-# Map area (above HUD)
+# Map area (above HUD) — this is the visible viewport height
 MAP_HEIGHT = HEIGHT - HUD_HEIGHT
+
+# World size (the full scrollable map)
+WORLD_W = 10000
+WORLD_H = 5400
+
+# Camera scrolling
+SCROLL_SPEED = 800  # pixels per second
+SCROLL_EDGE = 30    # pixels from screen edge to trigger scroll
 
 # Colors
 MAP_COLOR = (34, 85, 34)
@@ -36,6 +44,25 @@ STARTING_RESOURCES = 50
 MINERAL_NODE_AMOUNT = 2500
 MINERAL_NODE_SIZE = 16  # radius
 MINERAL_NODE_COLOR = (50, 150, 255)
+
+# Mineral offsets from Town Center — shared by both player and AI
+# (dx, dy) pairs; player uses +dx, AI uses -dx (mirrored)
+MINERAL_OFFSETS = [
+    (250, -80),
+    (200, 220),
+    (500, -80),
+    (500, 520),
+    (800, 120),
+    (1000, 70),
+    (800, 720),
+    (1200, -30),
+    (1400, -130),
+    (1500, 320),
+]
+
+# Starting Town Center positions
+PLAYER_TC_POS = (100, 280)
+AI_TC_POS = (8000, 280)
 
 # Worker
 WORKER_COST = 15
@@ -93,3 +120,12 @@ BARRACKS_SIZE = (64, 64)
 # Factory
 FACTORY_COST = 80
 FACTORY_SIZE = (64, 64)
+
+# Defense Tower
+TOWER_COST = 300
+TOWER_SIZE = (48, 48)
+TOWER_HP = 1000
+TOWER_FIRE_RATE = 1.5  # shots per second (between soldier and tank)
+TOWER_DAMAGE = 25
+TOWER_RANGE = 200  # pixels, large range
+TOWER_SPRITE = os.path.join(ASSETS_DIR, "tower.png")  # will use fallback if missing

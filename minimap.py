@@ -1,17 +1,17 @@
 import pygame
-from settings import WIDTH, MAP_HEIGHT, HUD_HEIGHT, HEIGHT
+from settings import WIDTH, MAP_HEIGHT, HUD_HEIGHT, HEIGHT, WORLD_W, WORLD_H
 
 
 # Minimap dimensions and position
 MINIMAP_W = 200
-MINIMAP_H = int(MINIMAP_W * MAP_HEIGHT / WIDTH)  # keep proportional (108px)
+MINIMAP_H = int(MINIMAP_W * WORLD_H / WORLD_W)  # keep proportional to world
 MINIMAP_MARGIN = 8
 MINIMAP_X = WIDTH - MINIMAP_W - MINIMAP_MARGIN
-MINIMAP_Y = MAP_HEIGHT - MINIMAP_H - MINIMAP_MARGIN
+MINIMAP_Y = MAP_HEIGHT + (HUD_HEIGHT - MINIMAP_H) // 2
 
-# Scale factors
-SCALE_X = MINIMAP_W / WIDTH
-SCALE_Y = MINIMAP_H / MAP_HEIGHT
+# Scale factors (world coords -> minimap coords)
+SCALE_X = MINIMAP_W / WORLD_W
+SCALE_Y = MINIMAP_H / WORLD_H
 
 # Colors
 BG_COLOR = (15, 40, 15, 180)
@@ -24,6 +24,7 @@ SELECTED_UNIT_COLOR = (255, 255, 100)
 ENEMY_COLOR = (255, 50, 50)
 AI_BUILDING_COLOR = (255, 160, 0)
 AI_UNIT_COLOR = (255, 200, 50)
+VIEWPORT_COLOR = (255, 255, 255)
 
 
 class Minimap:
@@ -35,7 +36,20 @@ class Minimap:
         """Convert world coordinates to minimap-local coordinates."""
         return int(wx * SCALE_X), int(wy * SCALE_Y)
 
-    def draw(self, screen, game_state):
+    def handle_click(self, screen_pos):
+        """If screen_pos is inside the minimap, return the world coords to center
+        the camera on, otherwise return None."""
+        if not self.rect.collidepoint(screen_pos):
+            return None
+        # Local position within the minimap
+        lx = screen_pos[0] - MINIMAP_X
+        ly = screen_pos[1] - MINIMAP_Y
+        # Convert to world coords and center the viewport
+        world_x = lx / SCALE_X - WIDTH / 2
+        world_y = ly / SCALE_Y - MAP_HEIGHT / 2
+        return (world_x, world_y)
+
+    def draw(self, screen, game_state, camera_x=0, camera_y=0):
         surf = self.surface
         surf.fill(BG_COLOR)
 
@@ -79,6 +93,13 @@ class Minimap:
             for u in getattr(ai_player, "units", []):
                 ux, uy = self._world_to_mini(u.x, u.y)
                 pygame.draw.rect(surf, AI_UNIT_COLOR, (ux - 1, uy - 1, 3, 3))
+
+        # Draw viewport rectangle (shows current camera view)
+        vx = int(camera_x * SCALE_X)
+        vy = int(camera_y * SCALE_Y)
+        vw = max(int(WIDTH * SCALE_X), 1)
+        vh = max(int(MAP_HEIGHT * SCALE_Y), 1)
+        pygame.draw.rect(surf, VIEWPORT_COLOR, (vx, vy, vw, vh), 1)
 
         # Blit minimap surface onto screen
         screen.blit(surf, (MINIMAP_X, MINIMAP_Y))
