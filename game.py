@@ -817,6 +817,12 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
         sel_rect = pygame.Rect(sx - unit.size - 2, sy - unit.size - 2,
                                unit.size * 2 + 4, unit.size * 2 + 4)
         pygame.draw.rect(surface, SELECT_COLOR, sel_rect, 1)
+        # Range circle for combat units
+        if unit.attack_range > 0:
+            r = int(unit.attack_range)
+            range_surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(range_surf, (100, 100, 140, 80), (r, r), r, 1)
+            surface.blit(range_surf, (sx - r, sy - r))
 
     # Health bar
     bar_w = unit.size * 2
