@@ -4,7 +4,7 @@ from settings import (
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
     SOLDIER_COST, TANK_COST, WORKER_COST,
-    TOTAL_WAVES,
+    TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL,
 )
 
 # Accent colors for HUD buttons
@@ -53,14 +53,16 @@ class HUD:
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
-                game_state.selected_building.start_production(game_state.resource_manager)
+                success = game_state.selected_building.start_production(game_state.resource_manager)
+                if not success:
+                    return "insufficient_funds"
             return True
         return True
 
     def is_in_hud(self, pos):
         return pos[1] >= MAP_HEIGHT
 
-    def draw(self, surface, game_state):
+    def draw(self, surface, game_state, resource_flash_timer=0.0):
         self._ensure_fonts()
         mouse_pos = pygame.mouse.get_pos()
 
@@ -69,26 +71,46 @@ class HUD:
         pygame.draw.rect(surface, HUD_BG, hud_rect)
         pygame.draw.line(surface, (80, 80, 80), (0, MAP_HEIGHT), (WIDTH, MAP_HEIGHT), 2)
 
-        # Resources
+        # Resources (flash red when insufficient funds)
         res_text = f"Resources: {int(game_state.resource_manager.amount)}"
-        surface.blit(self.font.render(res_text, True, (255, 215, 0)),
+        if resource_flash_timer > 0:
+            # Flash between red and gold
+            flash = int(resource_flash_timer * 10) % 2 == 0
+            res_color = (255, 60, 60) if flash else (255, 215, 0)
+        else:
+            res_color = (255, 215, 0)
+        surface.blit(self.font.render(res_text, True, res_color),
                      (15, MAP_HEIGHT + 10))
 
-        # Wave info
+        # Wave info + countdown timer
         wm = game_state.wave_manager
         wave_text = f"Wave: {wm.waves_completed}/{TOTAL_WAVES}"
         surface.blit(self.font.render(wave_text, True, (200, 200, 255)),
                      (15, MAP_HEIGHT + 34))
-        enemies_text = f"Enemies: {len(wm.enemies)}"
-        surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
-                     (15, MAP_HEIGHT + 56))
+        if not wm.wave_active and wm.current_wave < TOTAL_WAVES:
+            # Show countdown to next wave
+            remaining = wm.wave_delay - wm.wave_timer
+            if remaining > 0:
+                mins = int(remaining) // 60
+                secs = int(remaining) % 60
+                countdown_text = f"Next wave in: {mins}:{secs:02d}"
+                countdown_color = (255, 200, 100) if remaining > 10 else (255, 80, 80)
+                surface.blit(self.small_font.render(countdown_text, True, countdown_color),
+                             (15, MAP_HEIGHT + 56))
+            else:
+                surface.blit(self.small_font.render("Wave incoming!", True, (255, 80, 80)),
+                             (15, MAP_HEIGHT + 56))
+        else:
+            enemies_text = f"Enemies: {len(wm.enemies)}"
+            surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
+                         (15, MAP_HEIGHT + 56))
 
-        # Build buttons
+        # Build buttons (with hotkey labels)
         self._draw_button(surface, self.buttons["towncenter"],
                           f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(TOWN_CENTER_COST))
         self._draw_button(surface, self.buttons["barracks"],
-                          f"Barracks ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
+                          f"Barracks [B] ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(BARRACKS_COST))
         self._draw_button(surface, self.buttons["factory"],
                           f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
@@ -175,7 +197,7 @@ class HUD:
                              (info_x, MAP_HEIGHT + 48))
 
         # Controls help
-        help_text = "T: Town Center | F: Factory | B: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
+        help_text = "T: Town Center | B: Barracks | F: Factory | P: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
         surface.blit(self.small_font.render(help_text, True, (120, 120, 120)),
                      (15, MAP_HEIGHT + HUD_HEIGHT - 22))
 

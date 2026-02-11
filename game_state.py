@@ -6,6 +6,7 @@ from buildings import Barracks, Factory, TownCenter
 from units import Worker, Soldier, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
+from ai_player import AIPlayer
 from settings import (
     MAP_HEIGHT, WIDTH, STARTING_WORKERS,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST,
@@ -22,6 +23,7 @@ class GameState:
         self.selected_building = None
         self.placement_mode = None  # None, "barracks", "factory", "towncenter"
         self.wave_manager = WaveManager()
+        self.ai_player = AIPlayer()
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
 
@@ -124,13 +126,13 @@ class GameState:
         if b.rect.left < 0 or b.rect.right > WIDTH:
             return False
 
-        # Check not overlapping existing buildings
-        for existing in self.buildings:
+        # Check not overlapping existing buildings (player + AI)
+        for existing in self.buildings + self.ai_player.buildings:
             if b.rect.colliderect(existing.rect):
                 return False
 
-        # Check not overlapping mineral nodes
-        for node in self.mineral_nodes:
+        # Check not overlapping mineral nodes (player + AI)
+        for node in self.mineral_nodes + self.ai_player.mineral_nodes:
             if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
                 return False
 
@@ -181,7 +183,7 @@ class GameState:
 
     def _collides_with_other(self, unit, x, y):
         """Check if unit at position (x, y) would overlap any other unit."""
-        all_units = self.units + self.wave_manager.enemies
+        all_units = self.units + self.wave_manager.enemies + self.ai_player.units
         for other in all_units:
             if other is unit:
                 continue
@@ -298,6 +300,8 @@ class GameState:
             return
 
         enemies = self.wave_manager.enemies
+        # Combine wave enemies and AI units as hostile to player
+        all_hostiles = enemies + self.ai_player.units
 
         # Update player units
         for unit in self.units:
@@ -321,9 +325,9 @@ class GameState:
                 else:
                     unit.try_attack(dt)
             else:
-                # Auto-target: soldiers/tanks fire at enemies in range
+                # Auto-target: soldiers/tanks fire at enemies AND AI units in range
                 if isinstance(unit, (Soldier, Tank)):
-                    target = unit.find_target(enemies)
+                    target = unit.find_target(all_hostiles, self.ai_player.buildings)
                     if target:
                         unit.target_enemy = target
                         unit.attacking = True
@@ -341,8 +345,19 @@ class GameState:
             if not enemy.attacking and enemy.waypoints:
                 self._move_unit_with_avoidance(enemy, dt)
 
+        # Update AI unit movement with avoidance
+        for ai_unit in self.ai_player.units:
+            if not ai_unit.alive:
+                continue
+            if isinstance(ai_unit, Worker) and ai_unit.state != "idle":
+                if ai_unit.waypoints:
+                    self._move_unit_with_avoidance(ai_unit, dt)
+                continue
+            if not ai_unit.attacking and ai_unit.waypoints:
+                self._move_unit_with_avoidance(ai_unit, dt)
+
         # Update stuck detection for all units
-        all_units = self.units + enemies
+        all_units = self.units + enemies + self.ai_player.units
         for unit in all_units:
             if not unit.alive:
                 continue
@@ -364,8 +379,12 @@ class GameState:
                 self._place_unit_at_free_spot(new_unit)
                 self.units.append(new_unit)
 
-        # Update wave manager (spawning, enemy AI, dead removal)
+        # Update wave manager (spawning, enemy AI against player + AI player)
         self.wave_manager.update(dt, self.units, self.buildings)
+
+        # Update AI player
+        all_units_for_collision = self.units + enemies + self.ai_player.units
+        self.ai_player.update(dt, self.units, self.buildings, all_units_for_collision)
 
         # Remove dead player units
         dead_units = [u for u in self.units if not u.alive]

@@ -7,8 +7,63 @@ from settings import (
 )
 from game_state import GameState
 from hud import HUD
+from minimap import Minimap
 from units import Soldier, Tank, Worker, Yanuses
 from buildings import Barracks, Factory, TownCenter
+
+
+class MoveMarker:
+    """Visual marker shown where a move command is issued."""
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.timer = 0.0
+        self.duration = 0.6
+
+    @property
+    def alive(self):
+        return self.timer < self.duration
+
+    def update(self, dt):
+        self.timer += dt
+
+    def draw(self, surface):
+        progress = self.timer / self.duration
+        alpha = int(255 * (1 - progress))
+        radius = int(8 + 12 * progress)
+        color = (0, 255, 100)
+        s = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(s, (*color, alpha), (radius, radius), radius, 2)
+        pygame.draw.line(s, (*color, alpha), (radius - 4, radius), (radius + 4, radius), 1)
+        pygame.draw.line(s, (*color, alpha), (radius, radius - 4), (radius, radius + 4), 1)
+        surface.blit(s, (self.x - radius, self.y - radius))
+
+
+class FloatingText:
+    """Floating text that rises and fades out."""
+    def __init__(self, x, y, text, color=(255, 215, 0)):
+        self.x = x
+        self.y = y
+        self.text = text
+        self.color = color
+        self.timer = 0.0
+        self.duration = 1.0
+
+    @property
+    def alive(self):
+        return self.timer < self.duration
+
+    def update(self, dt):
+        self.timer += dt
+        self.y -= 30 * dt
+
+    def draw(self, surface):
+        progress = self.timer / self.duration
+        alpha = int(255 * (1 - progress))
+        font = pygame.font.SysFont(None, 22)
+        text_surf = font.render(self.text, True, self.color)
+        text_surf.set_alpha(alpha)
+        surface.blit(text_surf, (int(self.x), int(self.y)))
 
 
 def _write_debug_log(state):
@@ -101,11 +156,18 @@ def main():
 
     state = GameState()
     hud = HUD()
+    minimap = Minimap()
 
     dragging = False
     drag_start = None
     drag_rect = None
     paused = False
+
+    # UX state
+    move_markers = []
+    floating_texts = []
+    resource_flash_timer = 0.0  # > 0 means resource counter is flashing
+    last_resource_amount = state.resource_manager.amount
 
     running = True
     while running:
@@ -121,8 +183,8 @@ def main():
                     running = False
                 continue
 
-            # Debug pause: B to pause + write log, ESC to resume
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_b:
+            # Debug pause: P to pause + write log, ESC to resume
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_p:
                 paused = True
                 _write_debug_log(state)
                 continue
@@ -137,6 +199,8 @@ def main():
                         state.placement_mode = None
                     else:
                         state.deselect_all()
+                elif event.key == pygame.K_b:
+                    state.placement_mode = "barracks"
                 elif event.key == pygame.K_f:
                     state.placement_mode = "factory"
                 elif event.key == pygame.K_t:
@@ -148,7 +212,9 @@ def main():
 
                     # Check HUD first
                     if hud.is_in_hud(pos):
-                        hud.handle_click(pos, state)
+                        result = hud.handle_click(pos, state)
+                        if result == "insufficient_funds":
+                            resource_flash_timer = 0.5
                         continue
 
                     # Placement mode
@@ -156,7 +222,8 @@ def main():
                         size = _get_placement_size(state.placement_mode)
                         bx = pos[0] - size[0] // 2
                         by = pos[1] - size[1] // 2
-                        state.place_building((bx, by))
+                        if not state.place_building((bx, by)):
+                            resource_flash_timer = 0.5
                         continue
 
                     # Start drag select
@@ -184,10 +251,13 @@ def main():
                                     u.set_target(pos)
                         else:
                             state.command_move(pos)
+                        move_markers.append(MoveMarker(pos[0], pos[1]))
                     elif mods & pygame.KMOD_SHIFT:
                         state.command_queue_waypoint(pos)
+                        move_markers.append(MoveMarker(pos[0], pos[1]))
                     else:
                         state.command_move(pos)
+                        move_markers.append(MoveMarker(pos[0], pos[1]))
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1 and dragging:
@@ -231,6 +301,30 @@ def main():
         if not paused:
             state.update(dt)
 
+        # Update UX effects
+        for m in move_markers:
+            m.update(dt)
+        move_markers = [m for m in move_markers if m.alive]
+        for ft in floating_texts:
+            ft.update(dt)
+        floating_texts = [ft for ft in floating_texts if ft.alive]
+        if resource_flash_timer > 0:
+            resource_flash_timer = max(0, resource_flash_timer - dt)
+
+        # Detect resource deposits (floating text)
+        current_amount = state.resource_manager.amount
+        if current_amount > last_resource_amount:
+            gained = int(current_amount - last_resource_amount)
+            # Find a worker that just deposited (state == "moving_to_mine" means just finished returning)
+            for u in state.units:
+                if isinstance(u, Worker) and u.state == "moving_to_mine":
+                    floating_texts.append(FloatingText(u.x, u.y - 20, f"+{gained}"))
+                    break
+            else:
+                # Fallback: show near HUD resource area
+                floating_texts.append(FloatingText(80, MAP_HEIGHT - 10, f"+{gained}"))
+        last_resource_amount = current_amount
+
         # Draw
         screen.fill(MAP_COLOR)
 
@@ -261,6 +355,19 @@ def main():
                 pygame.draw.line(screen, (255, 255, 0),
                                  (int(unit.x), int(unit.y)), (tx, ty), 1)
 
+        # Draw AI player (buildings, units, mineral nodes)
+        state.ai_player.draw(screen)
+        # Draw AI attack lines
+        for ai_unit in state.ai_player.units:
+            if ai_unit.attacking and ai_unit.target_enemy:
+                t = ai_unit.target_enemy
+                if hasattr(t, 'size'):
+                    tx, ty = int(t.x), int(t.y)
+                else:
+                    tx, ty = t.x + t.w // 2, t.y + t.h // 2
+                pygame.draw.line(screen, (255, 140, 0),
+                                 (int(ai_unit.x), int(ai_unit.y)), (tx, ty), 1)
+
         # Draw enemies
         for enemy in state.wave_manager.enemies:
             enemy.draw(screen)
@@ -274,17 +381,24 @@ def main():
                 pygame.draw.line(screen, (255, 80, 80),
                                  (int(enemy.x), int(enemy.y)), (tx, ty), 1)
 
-        # Draw placement ghost
+        # Draw placement ghost (green=valid, red=invalid)
         if state.placement_mode:
             mx, my = pygame.mouse.get_pos()
             size = _get_placement_size(state.placement_mode)
             sprite = _get_placement_sprite(state.placement_mode)
             ghost_rect = pygame.Rect(mx - size[0] // 2, my - size[1] // 2, size[0], size[1])
+            valid = _is_placement_valid(ghost_rect, state)
+            ghost_color = (0, 255, 0) if valid else (255, 50, 50)
             if sprite:
                 ghost_surf = sprite.copy()
                 ghost_surf.set_alpha(140)
+                if not valid:
+                    # Tint red for invalid placement
+                    red_tint = pygame.Surface(ghost_surf.get_size(), pygame.SRCALPHA)
+                    red_tint.fill((255, 0, 0, 80))
+                    ghost_surf.blit(red_tint, (0, 0))
                 screen.blit(ghost_surf, ghost_rect.topleft)
-            pygame.draw.rect(screen, (0, 255, 0), ghost_rect, 1)
+            pygame.draw.rect(screen, ghost_color, ghost_rect, 2)
 
         # Draw drag selection box
         if dragging and drag_rect:
@@ -300,8 +414,43 @@ def main():
                 for wx, wy in unit.waypoints:
                     pygame.draw.circle(screen, (255, 255, 0), (int(wx), int(wy)), 3, 1)
 
+        # Draw move-order markers
+        for marker in move_markers:
+            marker.draw(screen)
+
+        # Draw floating texts
+        for ft in floating_texts:
+            ft.draw(screen)
+
+        # Draw unit count badge near cursor when multiple units selected
+        if len(state.selected_units) > 1:
+            cmx, cmy = pygame.mouse.get_pos()
+            badge_font = pygame.font.SysFont(None, 18)
+            badge_text = badge_font.render(str(len(state.selected_units)), True, (255, 255, 255))
+            badge_w = badge_text.get_width() + 8
+            badge_h = badge_text.get_height() + 4
+            badge_rect = pygame.Rect(cmx + 14, cmy - 2, badge_w, badge_h)
+            pygame.draw.rect(screen, (0, 120, 0), badge_rect, border_radius=3)
+            pygame.draw.rect(screen, (0, 200, 0), badge_rect, 1, border_radius=3)
+            screen.blit(badge_text, (badge_rect.x + 4, badge_rect.y + 2))
+
+        # Draw building HP on hover
+        hover_pos = pygame.mouse.get_pos()
+        for building in state.buildings:
+            if building.rect.collidepoint(hover_pos):
+                hp_font = pygame.font.SysFont(None, 20)
+                hp_text = hp_font.render(f"HP: {building.hp}/{building.max_hp}", True, (255, 255, 255))
+                hp_bg = pygame.Surface((hp_text.get_width() + 6, hp_text.get_height() + 4), pygame.SRCALPHA)
+                hp_bg.fill((0, 0, 0, 160))
+                screen.blit(hp_bg, (hover_pos[0] + 10, hover_pos[1] - 20))
+                screen.blit(hp_text, (hover_pos[0] + 13, hover_pos[1] - 18))
+                break
+
         # Draw HUD
-        hud.draw(screen, state)
+        hud.draw(screen, state, resource_flash_timer)
+
+        # Draw minimap
+        minimap.draw(screen, state)
 
         # Paused overlay
         if paused:
@@ -358,6 +507,32 @@ def _get_placement_sprite(mode):
     elif mode == "towncenter":
         return TownCenter.sprite
     return None
+
+
+def _is_placement_valid(ghost_rect, state):
+    """Check if a building can be placed at the ghost rect position."""
+    if ghost_rect.bottom > MAP_HEIGHT or ghost_rect.top < 0:
+        return False
+    if ghost_rect.left < 0 or ghost_rect.right > WIDTH:
+        return False
+    for existing in state.buildings:
+        if ghost_rect.colliderect(existing.rect):
+            return False
+    # Check overlap with AI buildings too
+    for existing in state.ai_player.buildings:
+        if ghost_rect.colliderect(existing.rect):
+            return False
+    for node in state.mineral_nodes:
+        if not node.depleted and ghost_rect.colliderect(node.rect.inflate(10, 10)):
+            return False
+    # Check overlap with AI mineral nodes
+    for node in state.ai_player.mineral_nodes:
+        if not node.depleted and ghost_rect.colliderect(node.rect.inflate(10, 10)):
+            return False
+    cost = state._placement_cost()
+    if not state.resource_manager.can_afford(cost):
+        return False
+    return True
 
 
 if __name__ == "__main__":

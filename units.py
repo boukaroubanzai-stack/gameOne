@@ -150,7 +150,14 @@ class Unit:
         by = self.y - self.size - 6
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
         fill_w = int(bar_w * (self.hp / self.max_hp))
-        pygame.draw.rect(surface, HEALTH_BAR_FG, (bx, by, fill_w, bar_h))
+        hp_ratio = self.hp / self.max_hp
+        if hp_ratio > 0.5:
+            bar_color = (0, 200, 0)
+        elif hp_ratio > 0.25:
+            bar_color = (255, 200, 0)
+        else:
+            bar_color = (255, 50, 50)
+        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
 
 
 class Soldier(Unit):

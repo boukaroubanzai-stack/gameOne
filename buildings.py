@@ -74,13 +74,20 @@ class Building:
             surface.blit(self.sprite, (self.x, self.y))
         if self.selected:
             pygame.draw.rect(surface, SELECT_COLOR, self.rect.inflate(6, 6), 2)
-        # Health bar
+        # Health bar (color-coded)
         bar_w = self.w
         bar_h = 4
         bx, by = self.x, self.y - 8
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
         fill_w = int(bar_w * (self.hp / self.max_hp))
-        pygame.draw.rect(surface, HEALTH_BAR_FG, (bx, by, fill_w, bar_h))
+        hp_ratio = self.hp / self.max_hp
+        if hp_ratio > 0.5:
+            bar_color = (0, 200, 0)
+        elif hp_ratio > 0.25:
+            bar_color = (255, 200, 0)
+        else:
+            bar_color = (255, 50, 50)
+        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
         # Label
         font = pygame.font.SysFont(None, 18)
         label = font.render(self.label, True, (255, 255, 255))
