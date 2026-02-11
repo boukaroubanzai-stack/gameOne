@@ -2,8 +2,9 @@ general map specifications:
 -the windows size must be 2000x1200 pixels
 -the world map is 10000x5400 pixels, scrollable via camera.
 -the camera scrolls when the mouse reaches the screen edge (30px margin) or using arrow keys.
--the game is over when 10 waves of enemies are destroyed by the player, or if the enemy destroy all player's units and building.
--the first wave of enemies spawns 2 minutes after the game starts. subsequent waves spawn every 30 seconds.
+-the game is over when all AI buildings and combat units are destroyed (victory), or if all player units and buildings are destroyed (defeat).
+-Yanuses wave enemies exist but are currently disabled.
+-the game runs at 2x simulation speed.
 -the player starts with 1 town center, 3 workers and 50 ressources.
 -there are 10 mineral nodes spread across the left/center of the map, each holding 2500 ressources.
 
@@ -16,13 +17,13 @@ minimap:
 
 units specifications:
 
-All units fires at enemy as soon as they are in range. this makes the unit stop moving unless the player order them to start moving again.
+All units fires at enemy as soon as they are in range. after the fight is over, units resume moving to their waypoint.
 Units cannot use the same space at the same time.
 Units cannot spawn in a space used by an existing unit.
 When a moving unit reaches a destination occupied by another unit, it stops next to it.
 When two moving units collide, one stops and waits until the other has moved away.
 When a unit is stuck for more than 0.5 second, it enters a "stuck" state and tries to escape by moving left, right, back-left or back-right.
-When a unit is stuck for more than 2 seconds, it gives up and stops.
+When a unit is stuck for more than 1 second, it gives up and clears its waypoint.
 When a unit is selected, all its stats are displayed in the bottom panel.
 
 the worker:
@@ -52,13 +53,14 @@ the tank:
 buildings specifications:
 
 -buildings can be attacked and destroyed by enemies.
+-all production buildings (town center, barracks, factory) have 200 health points.
 -the town center costs 100 ressources to place.
 -the barracks costs 50 ressources to place.
 -the factory costs 80 ressources to place.
--the defense tower costs 150 ressources to place.
+-the defense tower costs 300 ressources to place.
 
 the defense tower:
--has 300 health points.
+-has 1000 health points.
 -does not produce units.
 -automatically targets and fires at enemies within range (200 pixels).
 -fires 1.5 shots per second, dealing 25 HP of damage.
@@ -69,11 +71,22 @@ AI computer player:
 -an AI opponent occupies the right side of the map (town center at ~8000, 280).
 -has its own set of 10 mineral nodes, workers, buildings, and combat units.
 -all AI entities are drawn with an orange tint to distinguish them from the player.
+-AI profile is selected via --ai <name> flag (defaults to "basic"). each profile is a file in ai_profiles/.
+-profiles control: think interval, max workers, soldier/tank ratio, attack threshold, garrison ratio, retreat ratio, resource reserve, and whether to build towers.
+
+AI profile "basic":
 -follows a build order: workers first, then barracks, then factory, then 2nd town center.
 -trains up to 8 workers, maintains a 3:1 soldier/tank ratio.
 -scouts before attacking, sends 70% of army to attack while 30% garrisons.
 -uses focus fire and retreats when army drops below 30%.
 -thinks every 1 second and adapts difficulty based on game progression.
+
+AI profile "defensive":
+-trains up to 10 workers for a stronger economy.
+-requires 12 combat units before launching an attack (double the basic threshold).
+-keeps 50% of army garrisoned at base for defense.
+-retreats sooner when outnumbered (40% ratio).
+-builds up to 6 defense towers near existing buildings.
 
 A new unit called "Yanuses" is an evil soldier-like enemy unit:
 -same HP and damage as the soldier
@@ -102,3 +115,9 @@ controls:
 -Shift + Right click: add waypoint to path.
 -Arrow keys: scroll the camera.
 -ESC: cancel placement, deselect, resume from pause, quit on game over.
+
+command line options:
+-python game.py                          # normal game (basic AI)
+-python game.py --ai <name>              # select AI profile (basic, defensive, etc.)
+-python game.py --playforme              # spectator mode: AI controls the player side at 20x speed
+-python game.py --replay replay/file.json  # replay viewer (Space=pause, +/-=speed, click timeline to seek)
