@@ -1,3 +1,5 @@
+"""Remote player proxy: replaces AIPlayer in multiplayer mode with no autonomous AI."""
+
 import math
 import random
 import pygame
@@ -15,14 +17,7 @@ AI_MINERAL_POSITIONS = [(AI_TC_POS[0] - dx, AI_TC_POS[1] + dy) for dx, dy in MIN
 
 AI_TINT_COLOR = (255, 140, 0)  # same as ai_player.py
 
-
-def tint_surface(surface, tint_color, alpha=100):
-    """Apply an orange tint overlay to a surface."""
-    tinted = surface.copy()
-    overlay = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
-    overlay.fill((*tint_color, alpha))
-    tinted.blit(overlay, (0, 0))
-    return tinted
+from utils import tint_surface
 
 
 class RemotePlayer:

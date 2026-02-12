@@ -1,3 +1,5 @@
+"""Main entry point: Pygame event loop, camera system, rendering, and replay viewer."""
+
 import atexit
 import pygame
 import sys
@@ -9,6 +11,7 @@ from settings import (
     WORLD_W, WORLD_H, SCROLL_SPEED, SCROLL_EDGE,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
+from utils import get_font, hp_bar_color, get_range_circle
 from game_state import GameState
 from hud import HUD
 from minimap import Minimap
@@ -72,8 +75,7 @@ class FloatingText:
     def draw(self, surface, cam_x, cam_y):
         progress = self.timer / self.duration
         alpha = int(255 * (1 - progress))
-        font = pygame.font.SysFont(None, 22)
-        text_surf = font.render(self.text, True, self.color)
+        text_surf = get_font(22).render(self.text, True, self.color)
         text_surf.set_alpha(alpha)
         surface.blit(text_surf, (int(self.x - cam_x), int(self.y - cam_y)))
 
@@ -240,8 +242,7 @@ def main():
             if net_host.accept():
                 waiting = False
             screen.fill((30, 30, 40))
-            font = pygame.font.SysFont(None, 36)
-            txt = font.render(f"Hosting on port {mp_port}... Waiting for peer.", True, (200, 200, 200))
+            txt = get_font(36).render(f"Hosting on port {mp_port}... Waiting for peer.", True, (200, 200, 200))
             screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
             pygame.display.flip()
             clock.tick(30)
@@ -786,15 +787,9 @@ def main():
         for unit in state.units:
             if visible_rect.collidepoint(int(unit.x), int(unit.y)):
                 _draw_unit_offset(screen, unit, cam_x, cam_y)
-            # Draw attack line when unit is firing
             if unit.attacking and unit.target_enemy:
-                t = unit.target_enemy
-                if hasattr(t, 'size'):
-                    tx, ty = int(t.x) - cam_x, int(t.y) - cam_y
-                else:
-                    tx, ty = t.x + t.w // 2 - cam_x, t.y + t.h // 2 - cam_y
-                pygame.draw.line(screen, (255, 255, 0),
-                                 (int(unit.x) - cam_x, int(unit.y) - cam_y), (tx, ty), 1)
+                _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
+                                  unit.target_enemy, cam_x, cam_y, (255, 255, 0))
 
         # Draw AI player (buildings, units, mineral nodes) with camera offset
         _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect)
@@ -803,15 +798,9 @@ def main():
         for enemy in state.wave_manager.enemies:
             if visible_rect.collidepoint(int(enemy.x), int(enemy.y)):
                 _draw_unit_offset(screen, enemy, cam_x, cam_y)
-            # Draw attack line when enemy is firing
             if enemy.attacking and enemy.target_enemy:
-                t = enemy.target_enemy
-                if hasattr(t, 'size'):
-                    tx, ty = int(t.x) - cam_x, int(t.y) - cam_y
-                else:
-                    tx, ty = t.x + t.w // 2 - cam_x, t.y + t.h // 2 - cam_y
-                pygame.draw.line(screen, (255, 80, 80),
-                                 (int(enemy.x) - cam_x, int(enemy.y) - cam_y), (tx, ty), 1)
+                _draw_attack_line(screen, int(enemy.x) - cam_x, int(enemy.y) - cam_y,
+                                  enemy.target_enemy, cam_x, cam_y, (255, 80, 80))
 
         # Draw disaster effects (with camera offset)
         disaster_mgr.draw(screen, cam_x, cam_y)
@@ -833,10 +822,7 @@ def main():
                 # Only draw if the circle is at least partially on screen
                 if bcx + radius < 0 or bcx - radius > WIDTH or bcy + radius < 0 or bcy - radius > MAP_HEIGHT:
                     continue
-                zone_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-                pygame.draw.circle(zone_surf, (100, 200, 100, 30), (radius, radius), radius)
-                pygame.draw.circle(zone_surf, (100, 200, 100, 60), (radius, radius), radius, 1)
-                screen.blit(zone_surf, (int(bcx - radius), int(bcy - radius)))
+                screen.blit(_get_zone_surface(radius), (int(bcx - radius), int(bcy - radius)))
 
         # Draw placement ghost (green=valid, red=invalid) — follows mouse in screen space
         if state.placement_mode:
@@ -888,8 +874,7 @@ def main():
         # Draw unit count badge near cursor when multiple units selected (screen coords)
         if len(state.selected_units) > 1:
             cmx, cmy = pygame.mouse.get_pos()
-            badge_font = pygame.font.SysFont(None, 18)
-            badge_text = badge_font.render(str(len(state.selected_units)), True, (255, 255, 255))
+            badge_text = get_font(18).render(str(len(state.selected_units)), True, (255, 255, 255))
             badge_w = badge_text.get_width() + 8
             badge_h = badge_text.get_height() + 4
             badge_rect = pygame.Rect(cmx + 14, cmy - 2, badge_w, badge_h)
@@ -902,8 +887,7 @@ def main():
         hover_world = _screen_to_world(hover_screen, camera_x, camera_y)
         for building in state.buildings:
             if building.rect.collidepoint(hover_world):
-                hp_font = pygame.font.SysFont(None, 20)
-                hp_text = hp_font.render(f"HP: {building.hp}/{building.max_hp}", True, (255, 255, 255))
+                hp_text = get_font(20).render(f"HP: {building.hp}/{building.max_hp}", True, (255, 255, 255))
                 hp_bg = pygame.Surface((hp_text.get_width() + 6, hp_text.get_height() + 4), pygame.SRCALPHA)
                 hp_bg.fill((0, 0, 0, 160))
                 screen.blit(hp_bg, (hover_screen[0] + 10, hover_screen[1] - 20))
@@ -921,12 +905,10 @@ def main():
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 120))
             screen.blit(overlay, (0, 0))
-            big_font = pygame.font.SysFont(None, 72)
-            small_font = pygame.font.SysFont(None, 32)
-            text = big_font.render("PAUSED", True, (255, 255, 100))
+            text = get_font(72).render("PAUSED", True, (255, 255, 100))
             text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))
             screen.blit(text, text_rect)
-            sub = small_font.render("dbug.log written  |  Press ESC to resume", True, (200, 200, 200))
+            sub = get_font(32).render("dbug.log written  |  Press ESC to resume", True, (200, 200, 200))
             sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
             screen.blit(sub, sub_rect)
 
@@ -935,15 +917,13 @@ def main():
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
             screen.blit(overlay, (0, 0))
-            big_font = pygame.font.SysFont(None, 72)
-            small_font = pygame.font.SysFont(None, 32)
             if state.game_result == "victory":
-                text = big_font.render("VICTORY!", True, (0, 255, 100))
+                text = get_font(72).render("VICTORY!", True, (0, 255, 100))
             else:
-                text = big_font.render("DEFEAT", True, (255, 60, 60))
+                text = get_font(72).render("DEFEAT", True, (255, 60, 60))
             text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 30))
             screen.blit(text, text_rect)
-            sub = small_font.render("Press ESC to quit", True, (200, 200, 200))
+            sub = get_font(32).render("Press ESC to quit", True, (200, 200, 200))
             sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
             screen.blit(sub, sub_rect)
 
@@ -957,6 +937,64 @@ def main():
 
     pygame.quit()
     sys.exit()
+
+
+# --- Shared drawing helpers (eliminate duplication) ---
+
+def _draw_attack_line(surface, attacker_sx, attacker_sy, target, cam_x, cam_y, color, width=1):
+    """Draw a firing line from attacker screen-pos to target screen-pos."""
+    if hasattr(target, 'size'):
+        tx, ty = int(target.x) - cam_x, int(target.y) - cam_y
+    else:
+        tx, ty = target.x + target.w // 2 - cam_x, target.y + target.h // 2 - cam_y
+    pygame.draw.line(surface, color, (attacker_sx, attacker_sy), (int(tx), int(ty)), width)
+
+
+def _draw_health_bar(surface, x, y, width, height, hp, max_hp, bg=(80, 0, 0)):
+    """Draw a colour-coded health bar (green > 50%, yellow > 25%, red below)."""
+    pygame.draw.rect(surface, bg, (x, y, width, height))
+    ratio = hp / max_hp if max_hp > 0 else 0
+    fill_w = int(width * ratio)
+    pygame.draw.rect(surface, hp_bar_color(ratio), (x, y, fill_w, height))
+
+
+def _draw_worker_extras(surface, unit, sx, sy):
+    """Draw worker overlays: carry dot, state text, deploy progress bar."""
+    if unit.carry_amount > 0:
+        pygame.draw.circle(surface, (255, 215, 0), (sx + unit.size, sy - unit.size), 4)
+    if unit.selected and unit.state != "idle":
+        state_text = unit.state.replace("_", " ")
+        label = get_font(14).render(state_text, True, (200, 200, 200))
+        surface.blit(label, (sx - unit.size, sy + unit.size + 2))
+    if unit.state == "deploying" and unit.deploy_building and unit.deploy_building_class:
+        build_time = unit.deploy_building_class.build_time
+        progress = min(unit.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
+        prog_w = unit.size * 3
+        prog_h = 3
+        px = sx - prog_w // 2
+        py = sy + unit.size + 14
+        pygame.draw.rect(surface, (60, 60, 60), (px, py, prog_w, prog_h))
+        pygame.draw.rect(surface, (0, 180, 255), (px, py, int(prog_w * progress), prog_h))
+
+
+def _draw_range_circle(surface, cx, cy, radius):
+    """Draw a cached semi-transparent range circle centered at (cx, cy)."""
+    r = int(radius)
+    circle_surf = get_range_circle(r)
+    surface.blit(circle_surf, (cx - r, cy - r))
+
+
+_zone_cache: dict[int, pygame.Surface] = {}
+
+def _get_zone_surface(radius):
+    """Return a cached semi-transparent placement zone circle."""
+    surf = _zone_cache.get(radius)
+    if surf is None:
+        surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (100, 200, 100, 30), (radius, radius), radius)
+        pygame.draw.circle(surf, (100, 200, 100, 60), (radius, radius), radius, 1)
+        _zone_cache[radius] = surf
+    return surf
 
 
 # --- Camera-offset drawing helpers ---
@@ -991,7 +1029,7 @@ def _draw_mineral_node_offset(surface, node, cam_x, cam_y):
         highlight = [(cx, cy - s + 3), (cx + s - 3, cy), (cx, cy - 2)]
         pygame.draw.polygon(surface, (130, 200, 255), highlight)
 
-    font = pygame.font.SysFont(None, 16)
+    font = get_font(16)
     label = font.render(str(node.remaining), True, (255, 255, 255))
     label_rect = label.get_rect(center=(cx, cy + s + 10))
     surface.blit(label, label_rect)
@@ -1029,36 +1067,11 @@ def _draw_building_offset(surface, building, cam_x, cam_y):
         if building.selected:
             r = pygame.Rect(ox, oy, building.w, building.h)
             pygame.draw.rect(surface, SELECT_COLOR, r.inflate(6, 6), 2)
-            # Range circle
-            range_surf = pygame.Surface((building.attack_range * 2, building.attack_range * 2), pygame.SRCALPHA)
-            pygame.draw.circle(range_surf, (100, 100, 140, 80),
-                               (building.attack_range, building.attack_range), building.attack_range, 1)
-            surface.blit(range_surf, (int(cx_t - building.attack_range), int(cy_t - building.attack_range)))
-        # Attack line
+            _draw_range_circle(surface, cx_t, cy_t, building.attack_range)
         if building.attacking and building.target_enemy:
-            t = building.target_enemy
-            if hasattr(t, 'size'):
-                tx, ty = int(t.x) - cam_x, int(t.y) - cam_y
-            else:
-                tx, ty = t.x + t.w // 2 - cam_x, t.y + t.h // 2 - cam_y
-            pygame.draw.line(surface, (255, 200, 50), (int(cx_t), int(cy_t)), (int(tx), int(ty)), 2)
-        # Health bar
-        bar_w = building.w
-        bar_h = 4
-        bx, by = ox, oy - 8
-        pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
-        fill_w = int(bar_w * (building.hp / building.max_hp))
-        hp_ratio = building.hp / building.max_hp
-        if hp_ratio > 0.5:
-            bar_color = (0, 200, 0)
-        elif hp_ratio > 0.25:
-            bar_color = (255, 200, 0)
-        else:
-            bar_color = (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
-        # Label
-        font = pygame.font.SysFont(None, 18)
-        label = font.render(building.label, True, (255, 255, 255))
+            _draw_attack_line(surface, int(cx_t), int(cy_t), building.target_enemy, cam_x, cam_y, (255, 200, 50), 2)
+        _draw_health_bar(surface, ox, oy - 8, building.w, 4, building.hp, building.max_hp, HEALTH_BAR_BG)
+        label = get_font(18).render(building.label, True, (255, 255, 255))
         label_rect = label.get_rect(center=(int(cx_t), oy - 16))
         surface.blit(label, label_rect)
         return
@@ -1068,23 +1081,8 @@ def _draw_building_offset(surface, building, cam_x, cam_y):
     if building.selected:
         r = pygame.Rect(ox, oy, building.w, building.h)
         pygame.draw.rect(surface, SELECT_COLOR, r.inflate(6, 6), 2)
-    # Health bar
-    bar_w = building.w
-    bar_h = 4
-    bx, by = ox, oy - 8
-    pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
-    fill_w = int(bar_w * (building.hp / building.max_hp))
-    hp_ratio = building.hp / building.max_hp
-    if hp_ratio > 0.5:
-        bar_color = (0, 200, 0)
-    elif hp_ratio > 0.25:
-        bar_color = (255, 200, 0)
-    else:
-        bar_color = (255, 50, 50)
-    pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
-    # Label
-    font = pygame.font.SysFont(None, 18)
-    label = font.render(building.label, True, (255, 255, 255))
+    _draw_health_bar(surface, ox, oy - 8, building.w, 4, building.hp, building.max_hp, HEALTH_BAR_BG)
+    label = get_font(18).render(building.label, True, (255, 255, 255))
     label_rect = label.get_rect(center=(ox + building.w // 2, oy - 16))
     surface.blit(label, label_rect)
     # Production bar
@@ -1110,49 +1108,14 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
         sel_rect = pygame.Rect(sx - unit.size - 2, sy - unit.size - 2,
                                unit.size * 2 + 4, unit.size * 2 + 4)
         pygame.draw.rect(surface, SELECT_COLOR, sel_rect, 1)
-        # Range circle for combat units
         if unit.attack_range > 0:
-            r = int(unit.attack_range)
-            range_surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            pygame.draw.circle(range_surf, (100, 100, 140, 80), (r, r), r, 1)
-            surface.blit(range_surf, (sx - r, sy - r))
+            _draw_range_circle(surface, sx, sy, unit.attack_range)
 
-    # Health bar
-    bar_w = unit.size * 2
-    bar_h = 3
-    bx = sx - unit.size
-    by = sy - unit.size - 6
-    pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
-    fill_w = int(bar_w * (unit.hp / unit.max_hp))
-    hp_ratio = unit.hp / unit.max_hp
-    if hp_ratio > 0.5:
-        bar_color = (0, 200, 0)
-    elif hp_ratio > 0.25:
-        bar_color = (255, 200, 0)
-    else:
-        bar_color = (255, 50, 50)
-    pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
+    _draw_health_bar(surface, sx - unit.size, sy - unit.size - 6,
+                     unit.size * 2, 3, unit.hp, unit.max_hp, HEALTH_BAR_BG)
 
-    # Worker-specific drawing
     if isinstance(unit, Worker):
-        if unit.carry_amount > 0:
-            pygame.draw.circle(surface, (255, 215, 0),
-                               (sx + unit.size, sy - unit.size), 4)
-        if unit.selected and unit.state != "idle":
-            font = pygame.font.SysFont(None, 14)
-            state_text = unit.state.replace("_", " ")
-            label = font.render(state_text, True, (200, 200, 200))
-            surface.blit(label, (sx - unit.size, sy + unit.size + 2))
-        # Construction progress bar when building
-        if unit.state == "deploying" and unit.deploy_building and unit.deploy_building_class:
-            build_time = unit.deploy_building_class.build_time
-            progress = min(unit.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
-            prog_w = unit.size * 3
-            prog_h = 3
-            px = sx - prog_w // 2
-            py = sy + unit.size + 14
-            pygame.draw.rect(surface, (60, 60, 60), (px, py, prog_w, prog_h))
-            pygame.draw.rect(surface, (0, 180, 255), (px, py, int(prog_w * progress), prog_h))
+        _draw_worker_extras(surface, unit, sx, sy)
 
 
 def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
@@ -1176,26 +1139,12 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
         else:
             _draw_building_offset(surface, building, cam_x, cam_y)
             continue
-        # Health bar and label
         if building.selected:
             from settings import SELECT_COLOR
             r = pygame.Rect(ox, oy, building.w, building.h)
             pygame.draw.rect(surface, SELECT_COLOR, r.inflate(6, 6), 2)
-        bar_w = building.w
-        bar_h = 4
-        bx, by = ox, oy - 8
-        pygame.draw.rect(surface, (80, 0, 0), (bx, by, bar_w, bar_h))
-        fill_w = int(bar_w * (building.hp / building.max_hp))
-        hp_ratio = building.hp / building.max_hp
-        if hp_ratio > 0.5:
-            bar_color = (0, 200, 0)
-        elif hp_ratio > 0.25:
-            bar_color = (255, 200, 0)
-        else:
-            bar_color = (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
-        font = pygame.font.SysFont(None, 18)
-        label = font.render(building.label, True, (255, 180, 100))
+        _draw_health_bar(surface, ox, oy - 8, building.w, 4, building.hp, building.max_hp)
+        label = get_font(18).render(building.label, True, (255, 180, 100))
         label_rect = label.get_rect(center=(ox + building.w // 2, oy - 16))
         surface.blit(label, label_rect)
         if building.production_queue:
@@ -1218,55 +1167,23 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
         else:
             _draw_unit_offset(surface, unit, cam_x, cam_y)
             continue
-        # Selection highlight
         if unit.selected:
             from settings import SELECT_COLOR
             sel_rect = pygame.Rect(sx - unit.size - 2, sy - unit.size - 2,
                                    unit.size * 2 + 4, unit.size * 2 + 4)
             pygame.draw.rect(surface, SELECT_COLOR, sel_rect, 1)
             if unit.attack_range > 0:
-                rr = int(unit.attack_range)
-                range_surf = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
-                pygame.draw.circle(range_surf, (100, 100, 140, 80), (rr, rr), rr, 1)
-                surface.blit(range_surf, (sx - rr, sy - rr))
-        # Health bar
-        bar_w = unit.size * 2
-        bar_h = 3
-        bx = sx - unit.size
-        by = sy - unit.size - 6
-        pygame.draw.rect(surface, (80, 0, 0), (bx, by, bar_w, bar_h))
-        fill_w = int(bar_w * (unit.hp / unit.max_hp))
-        pygame.draw.rect(surface, (255, 140, 0), (bx, by, fill_w, bar_h))
-        # Worker-specific drawing
+                _draw_range_circle(surface, sx, sy, unit.attack_range)
+        _draw_health_bar(surface, sx - unit.size, sy - unit.size - 6,
+                         unit.size * 2, 3, unit.hp, unit.max_hp)
         if isinstance(unit, Worker):
-            if unit.carry_amount > 0:
-                pygame.draw.circle(surface, (255, 215, 0),
-                                   (sx + unit.size, sy - unit.size), 4)
-            if unit.selected and unit.state != "idle":
-                font = pygame.font.SysFont(None, 14)
-                state_text = unit.state.replace("_", " ")
-                label = font.render(state_text, True, (200, 200, 200))
-                surface.blit(label, (sx - unit.size, sy + unit.size + 2))
-            if unit.state == "deploying" and unit.deploy_building and unit.deploy_building_class:
-                build_time = unit.deploy_building_class.build_time
-                progress = min(unit.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
-                prog_w = unit.size * 3
-                prog_h = 3
-                px = sx - prog_w // 2
-                py = sy + unit.size + 14
-                pygame.draw.rect(surface, (60, 60, 60), (px, py, prog_w, prog_h))
-                pygame.draw.rect(surface, (0, 180, 255), (px, py, int(prog_w * progress), prog_h))
+            _draw_worker_extras(surface, unit, sx, sy)
 
     # AI attack lines
     for ai_unit in ai_player.units:
         if ai_unit.attacking and ai_unit.target_enemy:
-            t = ai_unit.target_enemy
-            if hasattr(t, 'size'):
-                tx, ty = int(t.x) - cam_x, int(t.y) - cam_y
-            else:
-                tx, ty = t.x + t.w // 2 - cam_x, t.y + t.h // 2 - cam_y
-            pygame.draw.line(surface, (255, 140, 0),
-                             (int(ai_unit.x) - cam_x, int(ai_unit.y) - cam_y), (tx, ty), 1)
+            _draw_attack_line(surface, int(ai_unit.x) - cam_x, int(ai_unit.y) - cam_y,
+                              ai_unit.target_enemy, cam_x, cam_y, (255, 140, 0))
 
 
 def _get_placement_size(mode):
@@ -1519,7 +1436,7 @@ def _replay_main(filename):
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
             screen.blit(overlay, (0, 0))
-            big_font = pygame.font.SysFont(None, 72)
+            big_font = get_font(72)
             if frame.get("game_result") == "victory":
                 text = big_font.render("VICTORY!", True, (0, 255, 100))
             else:
@@ -1559,8 +1476,8 @@ def _draw_replay_overlay(screen, player, frame):
     bar_rect = pygame.Rect(0, MAP_HEIGHT, WIDTH, HEIGHT - MAP_HEIGHT)
     pygame.draw.rect(screen, HUD_BG, bar_rect)
 
-    font = pygame.font.SysFont(None, 24)
-    small_font = pygame.font.SysFont(None, 18)
+    font = get_font(24)
+    small_font = get_font(18)
 
     # Speed indicator
     speed_text = f"Speed: {player.speed:.1f}x"

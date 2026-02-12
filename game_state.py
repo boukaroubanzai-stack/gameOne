@@ -1,3 +1,5 @@
+"""Core game state: entity management, update loop, collision avoidance, win/loss."""
+
 import math
 import random
 import pygame
@@ -28,6 +30,9 @@ class GameState:
         self.wave_manager = WaveManager()
         self._next_unit_id = 0
         self._next_building_id = 0
+        self._unit_by_net_id: dict[int, object] = {}
+        self._building_by_net_id: dict[int, object] = {}
+        self._cached_all_units = None  # rebuilt once per frame
         if multiplayer:
             from multiplayer_state import RemotePlayer
             self.ai_player = RemotePlayer()
@@ -44,25 +49,27 @@ class GameState:
     def assign_unit_id(self, unit):
         unit.net_id = self._next_unit_id
         self._next_unit_id += 1
+        self._unit_by_net_id[unit.net_id] = unit
         return unit
 
     def assign_building_id(self, building):
         building.net_id = self._next_building_id
         self._next_building_id += 1
+        self._building_by_net_id[building.net_id] = building
         return building
 
     def get_unit_by_net_id(self, net_id, team="player"):
-        units = self.units if team == "player" else self.ai_player.units
-        for u in units:
-            if u.net_id == net_id:
-                return u
+        """O(1) lookup by net_id."""
+        unit = self._unit_by_net_id.get(net_id)
+        if unit and unit.alive:
+            return unit
         return None
 
     def get_building_by_net_id(self, net_id, team="player"):
-        buildings = self.buildings if team == "player" else self.ai_player.buildings
-        for b in buildings:
-            if b.net_id == net_id:
-                return b
+        """O(1) lookup by net_id."""
+        building = self._building_by_net_id.get(net_id)
+        if building and building.hp > 0:
+            return building
         return None
 
     def _setup_starting_state(self):
@@ -310,8 +317,7 @@ class GameState:
 
     def _collides_with_other(self, unit, x, y):
         """Check if unit at position (x, y) would overlap any other unit."""
-        all_units = self.units + self.wave_manager.enemies + self.ai_player.units
-        for other in all_units:
+        for other in self._cached_all_units or (self.units + self.wave_manager.enemies + self.ai_player.units):
             if other is unit:
                 continue
             dist = math.hypot(x - other.x, y - other.y)
@@ -320,7 +326,16 @@ class GameState:
         return None
 
     def _move_unit_with_avoidance(self, unit, dt):
-        """Move a unit toward its waypoint, steering around blocking units."""
+        """Move a unit toward its waypoint, steering around blocking units.
+
+        Algorithm:
+        1. Try direct path to waypoint.
+        2. If blocked, try perpendicular and diagonal steering directions.
+        3. If destination itself is blocked, stop adjacent to the blocker.
+        4. If stuck > 0.5s, try escape directions (left/right/back-diag).
+        5. If stuck > 1.0s, give up and clear waypoint.
+        Two moving units yield based on net_id priority (lower ID stops).
+        """
         if not unit.waypoints:
             return
         tx, ty = unit.waypoints[0]
@@ -475,6 +490,9 @@ class GameState:
             unit.deploy_building = False
 
     def update(self, dt):
+        """Main per-frame update. Order: deploy workers, player units (combat + movement),
+        enemy movement, AI movement, stuck detection, building production, waves, AI think,
+        dead removal, win/lose check."""
         if self.game_over:
             return
 
@@ -484,6 +502,8 @@ class GameState:
         enemies = self.wave_manager.enemies
         # Combine wave enemies and AI units as hostile to player
         all_hostiles = enemies + self.ai_player.units
+        # Cache combined unit list for collision checks (rebuilt each frame)
+        self._cached_all_units = self.units + enemies + self.ai_player.units
 
         # Update player units
         for unit in self.units:
@@ -583,8 +603,7 @@ class GameState:
                 self._move_unit_with_avoidance(ai_unit, dt)
 
         # Update stuck detection for all units
-        all_units = self.units + enemies + self.ai_player.units
-        for unit in all_units:
+        for unit in self._cached_all_units:
             if not unit.alive:
                 continue
             moved = math.hypot(unit.x - unit._last_x, unit.y - unit._last_y)
@@ -613,8 +632,7 @@ class GameState:
         self.wave_manager.update(dt, self.units, self.buildings)
 
         # Update AI player
-        all_units_for_collision = self.units + enemies + self.ai_player.units
-        self.ai_player.update(dt, self.units, self.buildings, all_units_for_collision)
+        self.ai_player.update(dt, self.units, self.buildings, self._cached_all_units)
 
         # Remove dead player units
         dead_units = [u for u in self.units if not u.alive]
@@ -622,10 +640,11 @@ class GameState:
             if u in self.selected_units:
                 self.selected_units.remove(u)
                 u.selected = False
-            # Release mining node / cancel deployment if worker
             if isinstance(u, Worker):
                 u.cancel_mining()
-                u.cancel_deploy()  # cost lost on death
+                u.cancel_deploy()
+            if u.net_id is not None:
+                self._unit_by_net_id.pop(u.net_id, None)
         self.units = [u for u in self.units if u.alive]
 
         # Remove dead buildings
@@ -633,7 +652,12 @@ class GameState:
         for b in dead_buildings:
             if b is self.selected_building:
                 self.selected_building = None
+            if b.net_id is not None:
+                self._building_by_net_id.pop(b.net_id, None)
         self.buildings = [b for b in self.buildings if b.hp > 0]
+
+        # Clear cached list (will be rebuilt next frame)
+        self._cached_all_units = None
 
         # Check win/lose conditions
         # Victory: AI has no buildings and no combat units left

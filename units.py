@@ -1,3 +1,5 @@
+"""Unit entities: base Unit class, Soldier, Tank, Worker (mining/building), Yanuses."""
+
 import math
 import pygame
 from settings import (
@@ -22,6 +24,7 @@ def _load_sprite(path, size):
 
 
 class Unit:
+    """Base class for all units. Handles movement, combat targeting, health, and drawing."""
     sprite = None
 
     def __init__(self, x, y, hp, speed, size, team="player",
@@ -176,20 +179,15 @@ class Unit:
             pygame.draw.rect(surface, SELECT_COLOR, self.rect.inflate(4, 4), 1)
 
     def _draw_health_bar(self, surface):
+        from utils import hp_bar_color
         bar_w = self.size * 2
         bar_h = 3
         bx = self.x - self.size
         by = self.y - self.size - 6
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
-        fill_w = int(bar_w * (self.hp / self.max_hp))
-        hp_ratio = self.hp / self.max_hp
-        if hp_ratio > 0.5:
-            bar_color = (0, 200, 0)
-        elif hp_ratio > 0.25:
-            bar_color = (255, 200, 0)
-        else:
-            bar_color = (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
+        ratio = self.hp / self.max_hp
+        fill_w = int(bar_w * ratio)
+        pygame.draw.rect(surface, hp_bar_color(ratio), (bx, by, fill_w, bar_h))
 
 
 class Soldier(Unit):
@@ -361,7 +359,13 @@ class Worker(Unit):
         return self.drop_off_building is not None
 
     def update_state(self, dt):
-        """Run mining state transitions (called by game_state when movement is handled externally)."""
+        """Run the worker state machine.
+
+        States: idle -> moving_to_mine -> waiting -> mining -> returning -> (loop)
+                idle -> deploying (building construction)
+                idle -> repairing (unit/building repair)
+        Called by GameState after movement is handled via collision avoidance.
+        """
         if self.state == "moving_to_mine":
             # Check if any town center exists to deliver to
             if not self._ensure_drop_off_building():
@@ -503,9 +507,9 @@ class Worker(Unit):
                                4)
         # Draw state indicator
         if self.selected and self.state != "idle":
-            font = pygame.font.SysFont(None, 14)
+            from utils import get_font
             state_text = self.state.replace("_", " ")
-            label = font.render(state_text, True, (200, 200, 200))
+            label = get_font(14).render(state_text, True, (200, 200, 200))
             surface.blit(label, (self.x - self.size, self.y + self.size + 2))
 
 

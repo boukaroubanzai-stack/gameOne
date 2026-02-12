@@ -221,7 +221,8 @@ class ReplayAIPlayer:
         ReplayAIPlayer._class_sprites_tinted = True
         from units import Soldier, Tank, Worker
         from buildings import TownCenter, Barracks, Factory
-        from ai_player import tint_surface, AI_TINT_COLOR
+        from utils import tint_surface
+        from ai_player import AI_TINT_COLOR
         sprite_map = {
             "soldier": Soldier.sprite,
             "tank": Tank.sprite,

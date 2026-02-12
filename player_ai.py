@@ -1,3 +1,5 @@
+"""Spectator-mode AI: controls the player side autonomously in --playforme mode."""
+
 import math
 import random
 from buildings import Barracks, Factory, TownCenter, DefenseTower

@@ -1,3 +1,5 @@
+"""Building entities: TownCenter, Barracks, Factory, DefenseTower, Watchguard."""
+
 import math
 import os
 import pygame
@@ -22,6 +24,7 @@ def _load_sprite(path, size):
 
 
 class Building:
+    """Base class for all buildings. Handles HP, selection, production queue, and drawing."""
     sprite = None
 
     def __init__(self, x, y, size, hp=200):
@@ -82,22 +85,16 @@ class Building:
         if self.selected:
             pygame.draw.rect(surface, SELECT_COLOR, self.rect.inflate(6, 6), 2)
         # Health bar (color-coded)
+        from utils import hp_bar_color, get_font
         bar_w = self.w
         bar_h = 4
         bx, by = self.x, self.y - 8
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx, by, bar_w, bar_h))
-        fill_w = int(bar_w * (self.hp / self.max_hp))
-        hp_ratio = self.hp / self.max_hp
-        if hp_ratio > 0.5:
-            bar_color = (0, 200, 0)
-        elif hp_ratio > 0.25:
-            bar_color = (255, 200, 0)
-        else:
-            bar_color = (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
+        ratio = self.hp / self.max_hp
+        fill_w = int(bar_w * ratio)
+        pygame.draw.rect(surface, hp_bar_color(ratio), (bx, by, fill_w, bar_h))
         # Label
-        font = pygame.font.SysFont(None, 18)
-        label = font.render(self.label, True, (255, 255, 255))
+        label = get_font(18).render(self.label, True, (255, 255, 255))
         label_rect = label.get_rect(center=(self.x + self.w // 2, self.y - 16))
         surface.blit(label, label_rect)
         # Production bar
@@ -269,23 +266,17 @@ class DefenseTower(Building):
             pygame.draw.circle(surface, (100, 100, 140, 80), (cx, cy), self.attack_range, 1)
 
         # Health bar
+        from utils import hp_bar_color, get_font
         bar_w = self.w
         bar_h = 4
         bx_bar, by_bar = self.x, self.y - 8
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx_bar, by_bar, bar_w, bar_h))
-        fill_w = int(bar_w * (self.hp / self.max_hp))
-        hp_ratio = self.hp / self.max_hp
-        if hp_ratio > 0.5:
-            bar_color = (0, 200, 0)
-        elif hp_ratio > 0.25:
-            bar_color = (255, 200, 0)
-        else:
-            bar_color = (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx_bar, by_bar, fill_w, bar_h))
+        ratio = self.hp / self.max_hp
+        fill_w = int(bar_w * ratio)
+        pygame.draw.rect(surface, hp_bar_color(ratio), (bx_bar, by_bar, fill_w, bar_h))
 
         # Label
-        font = pygame.font.SysFont(None, 18)
-        label = font.render(self.label, True, (255, 255, 255))
+        label = get_font(18).render(self.label, True, (255, 255, 255))
         label_rect = label.get_rect(center=(cx, self.y - 16))
         surface.blit(label, label_rect)
 
@@ -332,16 +323,15 @@ class Watchguard(Building):
             pygame.draw.circle(surface, (100, 140, 100, 80), (cx, cy), self.zone_radius, 1)
 
         # Health bar
+        from utils import hp_bar_color, get_font
         bar_w = self.w
         bar_h = 4
         bx_bar, by_bar = self.x, self.y - 8
         pygame.draw.rect(surface, HEALTH_BAR_BG, (bx_bar, by_bar, bar_w, bar_h))
-        fill_w = int(bar_w * (self.hp / self.max_hp))
-        hp_ratio = self.hp / self.max_hp
-        bar_color = (0, 200, 0) if hp_ratio > 0.5 else (255, 200, 0) if hp_ratio > 0.25 else (255, 50, 50)
-        pygame.draw.rect(surface, bar_color, (bx_bar, by_bar, fill_w, bar_h))
+        ratio = self.hp / self.max_hp
+        fill_w = int(bar_w * ratio)
+        pygame.draw.rect(surface, hp_bar_color(ratio), (bx_bar, by_bar, fill_w, bar_h))
 
-        font = pygame.font.SysFont(None, 18)
-        label = font.render(self.label, True, (255, 255, 255))
+        label = get_font(18).render(self.label, True, (255, 255, 255))
         label_rect = label.get_rect(center=(cx, self.y - 16))
         surface.blit(label, label_rect)

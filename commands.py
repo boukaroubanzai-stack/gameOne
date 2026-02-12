@@ -1,3 +1,5 @@
+"""Multiplayer command execution: translates network commands into game actions."""
+
 import math
 from units import Worker, Soldier, Tank
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard

@@ -1,3 +1,5 @@
+"""Mineral node entity: minable resource deposits placed near town centres."""
+
 import pygame
 from settings import MINERAL_NODE_AMOUNT, MINERAL_NODE_SIZE, MINERAL_NODE_COLOR, MINERAL_OFFSETS, PLAYER_TC_POS
 
@@ -61,7 +63,7 @@ class MineralNode:
             pygame.draw.polygon(surface, (130, 200, 255), highlight)
 
         # Remaining label
-        font = pygame.font.SysFont(None, 16)
-        label = font.render(str(self.remaining), True, (255, 255, 255))
+        from utils import get_font
+        label = get_font(16).render(str(self.remaining), True, (255, 255, 255))
         label_rect = label.get_rect(center=(cx, cy + s + 10))
         surface.blit(label, label_rect)

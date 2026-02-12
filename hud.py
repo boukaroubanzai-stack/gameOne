@@ -1,5 +1,8 @@
+"""Heads-up display: resource counter, build buttons, unit/building info panel."""
+
 import pygame
 import settings
+from utils import get_font
 from settings import (
     HUD_HEIGHT,
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
@@ -21,15 +24,16 @@ WATCHGUARD_ACCENT = (140, 110, 60)
 
 class HUD:
     def __init__(self):
-        self.font = None
-        self.small_font = None
         self.buttons = {}
         self._init_buttons()
 
-    def _ensure_fonts(self):
-        if self.font is None:
-            self.font = pygame.font.SysFont(None, 24)
-            self.small_font = pygame.font.SysFont(None, 18)
+    @property
+    def font(self):
+        return get_font(24)
+
+    @property
+    def small_font(self):
+        return get_font(18)
 
     def resize(self):
         self._init_buttons()
@@ -91,7 +95,6 @@ class HUD:
         return pos[1] >= settings.MAP_HEIGHT
 
     def draw(self, surface, game_state, resource_flash_timer=0.0, local_team="player"):
-        self._ensure_fonts()
         mouse_pos = pygame.mouse.get_pos()
 
         # HUD background
@@ -250,7 +253,6 @@ class HUD:
                      (15, settings.MAP_HEIGHT + HUD_HEIGHT - 22))
 
     def _draw_button(self, surface, rect, text, accent_color, mouse_pos, enabled):
-        self._ensure_fonts()
         if not enabled:
             color = (50, 50, 50)
             text_color = (100, 100, 100)

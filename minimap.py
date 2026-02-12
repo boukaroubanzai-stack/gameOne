@@ -1,3 +1,5 @@
+"""Minimap overlay: world-proportional map showing all entities and camera viewport."""
+
 import pygame
 import settings
 

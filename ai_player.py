@@ -1,3 +1,5 @@
+"""AI opponent: economy, build order, military training, attack waves, focus fire."""
+
 import math
 import random
 import pygame
@@ -33,17 +35,7 @@ AI_RETREAT_RATIO = 0.3  # retreat when army is < 30% of enemy force
 AI_RESOURCE_RESERVE = 100  # keep some resources for emergency replacements
 
 
-def tint_surface(surface, tint_color):
-    """Return a copy of the surface with a color tint overlay."""
-    tinted = surface.copy()
-    overlay = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
-    overlay.fill(tint_color)
-    tinted.blit(overlay, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    # Add an orange overlay on top for visibility
-    orange_overlay = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
-    orange_overlay.fill((255, 120, 40, 100))
-    tinted.blit(orange_overlay, (0, 0))
-    return tinted
+from utils import tint_surface, get_font
 
 
 class AIPlayer:
@@ -1006,8 +998,7 @@ class AIPlayer:
             fill_w = int(bar_w * (building.hp / building.max_hp))
             pygame.draw.rect(surface, (255, 140, 0), (bx, by, fill_w, bar_h))
             # Label
-            font = pygame.font.SysFont(None, 18)
-            label = font.render(f"AI {building.label}", True, (255, 180, 100))
+            label = get_font(18).render(f"AI {building.label}", True, (255, 180, 100))
             label_rect = label.get_rect(center=(building.x + building.w // 2, building.y - 16))
             surface.blit(label, label_rect)
             # Production bar

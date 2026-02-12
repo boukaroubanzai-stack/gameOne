@@ -1,3 +1,5 @@
+"""Game balance constants: screen/world dimensions, unit/building stats, costs, colours, and asset paths."""
+
 # Screen (viewport)
 WIDTH = 2000
 HEIGHT = 1200
@@ -67,7 +69,7 @@ AI_TC_POS = (8000, 280)
 # Worker
 WORKER_COST = 15
 WORKER_HP = 30
-WORKER_SPEED = 80  # pixels per second
+WORKER_SPEED = 160  # pixels per second
 WORKER_SIZE = 12  # half-width
 WORKER_TRAIN_TIME = 4.0  # seconds
 WORKER_CARRY_CAPACITY = 10  # resources per trip
@@ -77,7 +79,7 @@ STARTING_WORKERS = 3
 # Soldier
 SOLDIER_COST = 100
 SOLDIER_HP = 100
-SOLDIER_SPEED = 120  # pixels per second
+SOLDIER_SPEED = 240  # pixels per second
 SOLDIER_SIZE = 16  # half-width
 SOLDIER_TRAIN_TIME = 3.0  # seconds
 SOLDIER_FIRE_RATE = 5.0  # shots per second
@@ -87,7 +89,7 @@ SOLDIER_RANGE = SOLDIER_SIZE * 7  # firing range
 # Tank
 TANK_COST = 350
 TANK_HP = 500
-TANK_SPEED = SOLDIER_SPEED // 2  # twice as slow as soldier
+TANK_SPEED = 120  # pixels per second
 TANK_SIZE = 20  # half-width
 TANK_TRAIN_TIME = 6.0  # seconds
 TANK_FIRE_RATE = 1.0  # shots per second
@@ -96,7 +98,7 @@ TANK_RANGE = TANK_SIZE * 7  # firing range
 
 # Yanuses (enemy)
 YANUSES_HP = 100
-YANUSES_SPEED = 80
+YANUSES_SPEED = 160
 YANUSES_SIZE = 16
 YANUSES_FIRE_RATE = 5.0
 YANUSES_DAMAGE = 10

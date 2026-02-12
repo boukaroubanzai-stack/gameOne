@@ -1,3 +1,5 @@
+"""Wave manager: spawns Yanuses enemy waves at timed intervals (currently disabled)."""
+
 import random
 from units import Yanuses
 from settings import (

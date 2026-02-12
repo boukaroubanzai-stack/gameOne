@@ -1,3 +1,5 @@
+"""Peer-to-peer networking: TCP host/client, lockstep synchronisation, UPnP, handshake."""
+
 import socket
 import struct
 import json

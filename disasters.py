@@ -1,3 +1,5 @@
+"""Natural disaster system: meteor, earthquake, lightning, toxic cloud effects."""
+
 import random
 import math
 import pygame
@@ -435,18 +437,15 @@ class DisasterManager:
                 pygame.draw.circle(glow, (200, 60, 0, alpha), (radius, radius), radius)
                 surface.blit(glow, (sx - radius, sy - radius))
 
-        # Draw particles
+        # Draw particles directly (no per-particle surface allocation)
         for p in d["particles"]:
             px = int(p["x"] - cx)
             py = int(p["y"] - cy)
             life_ratio = max(0, p["life"] / p["max_life"])
-            alpha = int(220 * life_ratio)
             size = max(1, int(p["size"] * life_ratio))
             r = min(255, 200 + int(55 * random.random()))
             g = int(120 * life_ratio)
-            particle_surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
-            pygame.draw.circle(particle_surf, (r, g, 0, alpha), (size, size), size)
-            surface.blit(particle_surf, (px - size, py - size))
+            pygame.draw.circle(surface, (r, g, 0), (px, py), size)
 
     def _draw_earthquake(self, surface, d, cx, cy):
         # Brown/grey ripple expanding outward
@@ -479,27 +478,19 @@ class DisasterManager:
     def _draw_lightning(self, surface, d, cx, cy):
         for bolt in d["bolts"]:
             life_ratio = max(0, bolt["life"] / bolt["max_life"])
-            # Flash overlay (brief white tint)
+            # Flash overlay (brief white tint) — one surface per bolt, not per segment
             if life_ratio > 0.7:
                 flash = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
                 flash_alpha = int(40 * (life_ratio - 0.7) / 0.3)
                 flash.fill((255, 255, 255, flash_alpha))
                 surface.blit(flash, (0, 0))
 
-            # Draw bolt segments
-            alpha = int(255 * life_ratio)
+            # Draw bolt segments directly (no per-segment surface allocation)
             for seg in bolt["segments"]:
                 p1 = (int(seg[0][0] - cx), int(seg[0][1] - cy))
                 p2 = (int(seg[1][0] - cx), int(seg[1][1] - cy))
-                # Glow (thicker, dimmer)
-                glow_alpha = max(0, alpha // 2)
-                glow_surf = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-                pygame.draw.line(glow_surf, (180, 180, 255, glow_alpha), p1, p2, 5)
-                surface.blit(glow_surf, (0, 0))
-                # Core (thin, bright)
-                core_surf = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-                pygame.draw.line(core_surf, (255, 255, 255, alpha), p1, p2, 2)
-                surface.blit(core_surf, (0, 0))
+                pygame.draw.line(surface, (180, 180, 255), p1, p2, 5)
+                pygame.draw.line(surface, (255, 255, 255), p1, p2, 2)
 
             # Strike point glow
             bx = int(bolt["x"] - cx)
@@ -531,31 +522,31 @@ class DisasterManager:
         if base_alpha <= 0 or radius <= 0:
             return
 
-        # Draw multiple layered circles for depth
+        # Draw all cloud layers onto a single SRCALPHA surface
+        cloud_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
         for i in range(4):
             layer_r = max(1, radius - i * 30)
             layer_alpha = min(255, base_alpha + i * 15)
-            g = 150 + i * 25  # green tint increases inward
+            g = 150 + i * 25
             b_val = 50 - i * 10
-            cloud_surf = pygame.Surface((layer_r * 2, layer_r * 2), pygame.SRCALPHA)
             pygame.draw.circle(cloud_surf, (80, min(255, g), max(0, b_val), layer_alpha),
-                               (layer_r, layer_r), layer_r)
-            surface.blit(cloud_surf, (sx - layer_r, sy - layer_r))
+                               (radius, radius), layer_r)
+        surface.blit(cloud_surf, (sx - radius, sy - radius))
 
-        # Edge wisps
+        # Edge wisps — draw onto a single surface
         num_wisps = 6
-        for i in range(num_wisps):
-            angle = (d["pulse_timer"] * 0.5 + i * (2 * math.pi / num_wisps))
-            wisp_dist = radius * 0.8
-            wx = sx + int(math.cos(angle) * wisp_dist)
-            wy = sy + int(math.sin(angle) * wisp_dist)
-            wisp_r = max(1, int(radius * 0.25))
-            wisp_alpha = int(40 * alpha_mult)
-            if wisp_alpha > 0:
-                wisp_surf = pygame.Surface((wisp_r * 2, wisp_r * 2), pygame.SRCALPHA)
-                pygame.draw.circle(wisp_surf, (100, 200, 50, wisp_alpha),
-                                   (wisp_r, wisp_r), wisp_r)
-                surface.blit(wisp_surf, (wx - wisp_r, wy - wisp_r))
+        wisp_r = max(1, int(radius * 0.25))
+        wisp_alpha = int(40 * alpha_mult)
+        if wisp_alpha > 0:
+            wisp_surf = pygame.Surface((radius * 2 + wisp_r * 2, radius * 2 + wisp_r * 2), pygame.SRCALPHA)
+            center = radius + wisp_r
+            for i in range(num_wisps):
+                angle = (d["pulse_timer"] * 0.5 + i * (2 * math.pi / num_wisps))
+                wisp_dist = radius * 0.8
+                wx = center + int(math.cos(angle) * wisp_dist)
+                wy = center + int(math.sin(angle) * wisp_dist)
+                pygame.draw.circle(wisp_surf, (100, 200, 50, wisp_alpha), (wx, wy), wisp_r)
+            surface.blit(wisp_surf, (sx - center, sy - center))
 
     # ------------------------------------------------------------------
     # Public helpers
