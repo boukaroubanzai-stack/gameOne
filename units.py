@@ -43,6 +43,7 @@ class Unit:
         self.target_enemy = None
         self.attacking = False
         self.hunting_target = None  # enemy visible but out of firing range
+        self.net_id = None  # multiplayer entity ID
         # Stuck detection
         self.stuck = False
         self.stuck_timer = 0.0

@@ -147,3 +147,7 @@ WATCHGUARD_ZONE_RADIUS = 500  # expands building area by 500px
 # Building placement zones
 BUILDING_ZONE_TC_RADIUS = 500      # can place within 500px of a Town Center
 BUILDING_ZONE_BUILDING_RADIUS = 100  # can place within 100px of any other building
+
+# Multiplayer
+MULTIPLAYER_PORT = 7777
+TICK_INTERVAL = 4  # lockstep tick every N frames

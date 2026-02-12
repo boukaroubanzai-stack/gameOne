@@ -46,7 +46,7 @@ class HUD:
             "train": pygame.Rect(880, y, 120, btn_h),
         }
 
-    def handle_click(self, pos, game_state):
+    def handle_click(self, pos, game_state, net_session=None, local_team="player"):
         if not self.is_in_hud(pos):
             return False
 
@@ -67,16 +67,30 @@ class HUD:
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
-                success = game_state.selected_building.start_production(game_state.resource_manager)
-                if not success:
-                    return "insufficient_funds"
+                if net_session:
+                    local_rm = game_state.resource_manager if local_team == "player" else game_state.ai_player.resource_manager
+                    try:
+                        _, cost, _ = game_state.selected_building.can_train()
+                        if local_rm.can_afford(cost):
+                            net_session.queue_command({
+                                "cmd": "train_unit",
+                                "building_id": game_state.selected_building.net_id,
+                            })
+                        else:
+                            return "insufficient_funds"
+                    except (NotImplementedError, TypeError):
+                        return "insufficient_funds"
+                else:
+                    success = game_state.selected_building.start_production(game_state.resource_manager)
+                    if not success:
+                        return "insufficient_funds"
             return True
         return True
 
     def is_in_hud(self, pos):
         return pos[1] >= settings.MAP_HEIGHT
 
-    def draw(self, surface, game_state, resource_flash_timer=0.0):
+    def draw(self, surface, game_state, resource_flash_timer=0.0, local_team="player"):
         self._ensure_fonts()
         mouse_pos = pygame.mouse.get_pos()
 
@@ -86,7 +100,8 @@ class HUD:
         pygame.draw.line(surface, (80, 80, 80), (0, settings.MAP_HEIGHT), (settings.WIDTH, settings.MAP_HEIGHT), 2)
 
         # Resources (flash red when insufficient funds)
-        res_text = f"Resources: {int(game_state.resource_manager.amount)}"
+        local_rm = game_state.resource_manager if local_team == "player" else game_state.ai_player.resource_manager
+        res_text = f"Resources: {int(local_rm.amount)}"
         if resource_flash_timer > 0:
             # Flash between red and gold
             flash = int(resource_flash_timer * 10) % 2 == 0

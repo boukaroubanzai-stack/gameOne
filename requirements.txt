@@ -1,1 +1,2 @@
 pygame>=2.5.0
+miniupnpc>=2.0.0

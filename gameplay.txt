@@ -146,3 +146,16 @@ command line options:
 -python game.py --ai <name>              # select AI profile (basic, defensive, etc.)
 -python game.py --playforme              # spectator mode: AI controls the player side
 -python game.py --replay replay/file.json  # replay viewer (Space=pause, +/-=speed, click timeline to seek)
+-python game.py --host                   # host a multiplayer game on port 7777
+-python game.py --host 9999             # host on custom port
+-python game.py --join 192.168.1.5       # join a hosted game
+-python game.py --join 192.168.1.5 9999  # join on custom port
+
+multiplayer:
+-peer-to-peer TCP/IP for 2 human players. one hosts, the other joins using the host IP.
+-the host plays the left side (player), the joiner plays the right side (ai side).
+-both peers run the full game simulation locally with lockstep command synchronization.
+-player commands (move, mine, build, train, repair) are exchanged every 4 frames (~67ms at 60fps).
+-UPnP port mapping is attempted automatically; manual port forwarding may be needed.
+-no AI opponent in multiplayer — both sides are human-controlled.
+-game runs at normal speed (1x) in multiplayer for deterministic synchronization.

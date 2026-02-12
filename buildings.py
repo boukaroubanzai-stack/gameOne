@@ -35,6 +35,7 @@ class Building:
         self.production_timer = 0.0
         self.rally_x = x + self.w // 2
         self.rally_y = y + self.h + 30
+        self.net_id = None  # multiplayer entity ID
 
     @property
     def rect(self):

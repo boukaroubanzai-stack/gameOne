@@ -87,6 +87,7 @@ class AIPlayer:
         # Tinted sprites (created after pygame init, on first update)
         self._sprites_tinted = False
         self._tinted_sprites = {}
+        self._game_state = None  # set by GameState after init for net_id assignment
 
         self._setup()
 
@@ -834,6 +835,8 @@ class AIPlayer:
                         break
 
             if valid:
+                if self._game_state:
+                    self._game_state.assign_building_id(b)
                 self.buildings.append(b)
             else:
                 self.resource_manager.deposit(unit.deploy_cost)
@@ -868,6 +871,8 @@ class AIPlayer:
                 new_unit = building.update(dt)
                 if new_unit is not None:
                     new_unit.team = "ai"
+                    if self._game_state:
+                        self._game_state.assign_unit_id(new_unit)
                     self._place_unit_at_free_spot(new_unit, all_units_for_collision)
                     self.units.append(new_unit)
 

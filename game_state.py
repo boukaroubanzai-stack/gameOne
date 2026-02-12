@@ -16,7 +16,8 @@ from settings import (
 
 
 class GameState:
-    def __init__(self, ai_profile=None):
+    def __init__(self, ai_profile=None, multiplayer=False, random_seed=None):
+        self.multiplayer = multiplayer
         self.resource_manager = ResourceManager()
         self.buildings = []
         self.units = []
@@ -25,11 +26,44 @@ class GameState:
         self.selected_building = None
         self.placement_mode = None  # None, "barracks", "factory", "towncenter"
         self.wave_manager = WaveManager()
-        self.ai_player = AIPlayer(profile=ai_profile)
+        self._next_unit_id = 0
+        self._next_building_id = 0
+        if multiplayer:
+            from multiplayer_state import RemotePlayer
+            self.ai_player = RemotePlayer()
+        else:
+            self.ai_player = AIPlayer(profile=ai_profile)
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
+        if random_seed is not None:
+            random.seed(random_seed)
 
+        self.ai_player._game_state = self
         self._setup_starting_state()
+
+    def assign_unit_id(self, unit):
+        unit.net_id = self._next_unit_id
+        self._next_unit_id += 1
+        return unit
+
+    def assign_building_id(self, building):
+        building.net_id = self._next_building_id
+        self._next_building_id += 1
+        return building
+
+    def get_unit_by_net_id(self, net_id, team="player"):
+        units = self.units if team == "player" else self.ai_player.units
+        for u in units:
+            if u.net_id == net_id:
+                return u
+        return None
+
+    def get_building_by_net_id(self, net_id, team="player"):
+        buildings = self.buildings if team == "player" else self.ai_player.buildings
+        for b in buildings:
+            if b.net_id == net_id:
+                return b
+        return None
 
     def _setup_starting_state(self):
         # Place mineral nodes
@@ -38,12 +72,20 @@ class GameState:
 
         # Place starting Town Center
         tc = TownCenter(PLAYER_TC_POS[0], PLAYER_TC_POS[1])
+        self.assign_building_id(tc)
         self.buildings.append(tc)
 
         # Spawn starting workers near the Town Center
         for i in range(STARTING_WORKERS):
             w = Worker(tc.rally_x + i * 25, tc.rally_y)
+            self.assign_unit_id(w)
             self.units.append(w)
+
+        # Assign net_ids to AI starting entities
+        for b in self.ai_player.buildings:
+            self.assign_building_id(b)
+        for u in self.ai_player.units:
+            self.assign_unit_id(u)
 
     def deselect_all(self):
         for u in self.selected_units:
@@ -82,13 +124,35 @@ class GameState:
         return None
 
     def get_mineral_node_at(self, pos):
-        for node in self.mineral_nodes:
+        for node in self.mineral_nodes + self.ai_player.mineral_nodes:
             if not node.depleted and node.rect.collidepoint(pos):
                 return node
         return None
 
     def get_units_in_rect(self, rect):
         return [u for u in self.units if rect.colliderect(u.rect)]
+
+    # Multiplayer-aware selection helpers
+    def get_local_unit_at(self, pos, local_team):
+        units = self.units if local_team == "player" else self.ai_player.units
+        for unit in reversed(units):
+            if unit.rect.collidepoint(pos):
+                return unit
+        return None
+
+    def get_local_building_at(self, pos, local_team):
+        buildings = self.buildings if local_team == "player" else self.ai_player.buildings
+        for building in reversed(buildings):
+            if building.rect.collidepoint(pos):
+                return building
+        return None
+
+    def get_local_units_in_rect(self, rect, local_team):
+        units = self.units if local_team == "player" else self.ai_player.units
+        return [u for u in units if rect.colliderect(u.rect)]
+
+    def get_local_mineral_nodes(self, local_team):
+        return self.mineral_nodes if local_team == "player" else self.ai_player.mineral_nodes
 
     def _find_nearest_town_center(self, x, y):
         best = None
@@ -115,9 +179,10 @@ class GameState:
                     self.resource_manager.deposit(refund)
                 unit.assign_to_mine(node, self.buildings, self.resource_manager)
 
-    def is_in_placement_zone(self, x, y):
+    def is_in_placement_zone(self, x, y, team="player"):
         """Check if position (x, y) is within a valid building placement zone."""
-        for b in self.buildings:
+        buildings = self.buildings if team == "player" else self.ai_player.buildings
+        for b in buildings:
             if b.hp <= 0:
                 continue
             cx, cy = b.x + b.w // 2, b.y + b.h // 2
@@ -338,7 +403,7 @@ class GameState:
 
         # Blocked by another moving unit — lower-priority unit waits
         blocker_is_moving = hasattr(blocker_on_path, 'waypoints') and blocker_on_path.waypoints
-        if blocker_is_moving and id(unit) < id(blocker_on_path):
+        if blocker_is_moving and (unit.net_id or 0) < (blocker_on_path.net_id or 0):
             return  # wait for the higher-priority unit to steer around
 
         # Try steering around the blocker (left, right, diagonals)
@@ -393,6 +458,7 @@ class GameState:
                         break
 
             if valid:
+                self.assign_building_id(b)
                 self.buildings.append(b)
                 if isinstance(b, Watchguard):
                     # Watchguard consumes the worker
@@ -539,6 +605,7 @@ class GameState:
             else:
                 new_unit = building.update(dt)
                 if new_unit is not None:
+                    self.assign_unit_id(new_unit)
                     self._place_unit_at_free_spot(new_unit)
                     self.units.append(new_unit)
 

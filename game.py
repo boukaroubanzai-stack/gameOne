@@ -170,6 +170,21 @@ def main():
 
     playforme = "--playforme" in sys.argv
 
+    # Parse multiplayer mode
+    multiplayer_mode = None  # None, "host", "join"
+    join_ip = None
+    mp_port = 7777
+    for i, arg in enumerate(sys.argv):
+        if arg == "--host":
+            multiplayer_mode = "host"
+            if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
+                mp_port = int(sys.argv[i + 1])
+        elif arg == "--join" and i + 1 < len(sys.argv):
+            multiplayer_mode = "join"
+            join_ip = sys.argv[i + 1]
+            if i + 2 < len(sys.argv) and sys.argv[i + 2].isdigit():
+                mp_port = int(sys.argv[i + 2])
+
     # Parse AI profile selection
     ai_profile_name = "basic"
     for i, arg in enumerate(sys.argv):
@@ -177,12 +192,21 @@ def main():
             ai_profile_name = sys.argv[i + 1]
             break
 
-    from ai_profiles import load_profile
-    ai_profile = load_profile(ai_profile_name)
+    ai_profile = None
+    if not multiplayer_mode:
+        from ai_profiles import load_profile
+        ai_profile = load_profile(ai_profile_name)
 
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
-    pygame.display.set_caption("GameOne - Simple RTS" + (" [SPECTATOR]" if playforme else ""))
+    caption = "GameOne - Simple RTS"
+    if playforme:
+        caption += " [SPECTATOR]"
+    elif multiplayer_mode == "host":
+        caption += " [HOST]"
+    elif multiplayer_mode == "join":
+        caption += " [JOIN]"
+    pygame.display.set_caption(caption)
     clock = pygame.time.Clock()
 
     # Load sprite assets (must happen after pygame.init())
@@ -195,7 +219,59 @@ def main():
     TownCenter.load_assets()
     DefenseTower.load_assets()
 
-    state = GameState(ai_profile=ai_profile)
+    # Multiplayer connection phase
+    net_session = None
+    local_team = "player"
+    net_cleanup = None
+    if multiplayer_mode == "host":
+        from network import NetworkHost, NetSession
+        import random as _random
+        net_host = NetworkHost(port=mp_port)
+        net_host.start()
+        net_cleanup = net_host.cleanup
+        # Waiting screen
+        waiting = True
+        while waiting:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
+                    net_host.cleanup()
+                    pygame.quit()
+                    return
+            if net_host.accept():
+                waiting = False
+            screen.fill((30, 30, 40))
+            font = pygame.font.SysFont(None, 36)
+            txt = font.render(f"Hosting on port {mp_port}... Waiting for peer.", True, (200, 200, 200))
+            screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
+            pygame.display.flip()
+            clock.tick(30)
+        net_session = NetSession(net_host.connection, is_host=True)
+        seed = _random.randint(0, 2**32)
+        net_session.send_handshake(seed)
+        if not net_session.wait_for_handshake_ack():
+            print("Handshake failed!")
+            net_host.cleanup()
+            pygame.quit()
+            return
+        local_team = "player"
+    elif multiplayer_mode == "join":
+        from network import NetworkClient, NetSession
+        net_client = NetworkClient(join_ip, port=mp_port)
+        try:
+            net_client.connect()
+        except Exception as e:
+            print(f"Failed to connect: {e}")
+            pygame.quit()
+            return
+        net_session = NetSession(net_client.connection, is_host=False)
+        if not net_session.wait_for_handshake():
+            print("Handshake failed!")
+            pygame.quit()
+            return
+        local_team = "ai"
+
+    random_seed = net_session.random_seed if net_session else None
+    state = GameState(ai_profile=ai_profile, multiplayer=(multiplayer_mode is not None), random_seed=random_seed)
     hud = HUD()
     minimap = Minimap()
     disaster_mgr = DisasterManager(WORLD_W, WORLD_H)
@@ -216,7 +292,8 @@ def main():
     move_markers = []
     floating_texts = []
     resource_flash_timer = 0.0  # > 0 means resource counter is flashing
-    last_resource_amount = state.resource_manager.amount
+    _local_rm = lambda: state.resource_manager if local_team == "player" else state.ai_player.resource_manager
+    last_resource_amount = _local_rm().amount
 
     # Scroll direction flags (for keyboard scrolling)
     scroll_left = False
@@ -234,7 +311,7 @@ def main():
     try:
      while running:
         dt = clock.tick(FPS) / 1000.0
-        sim_dt = dt * 2
+        sim_dt = dt if net_session else dt * 2
 
         # Auto-exit playforme after game over (give 2s for final frames)
         if playforme and state.game_over:
@@ -330,7 +407,7 @@ def main():
 
                     # Check HUD first (screen coords)
                     if hud.is_in_hud(screen_pos):
-                        result = hud.handle_click(screen_pos, state)
+                        result = hud.handle_click(screen_pos, state, net_session=net_session, local_team=local_team)
                         if result == "insufficient_funds":
                             resource_flash_timer = 0.5
                         continue
@@ -343,8 +420,28 @@ def main():
                         size = _get_placement_size(state.placement_mode)
                         bx = world_pos[0] - size[0] // 2
                         by = world_pos[1] - size[1] // 2
-                        if not state.place_building((bx, by)):
-                            resource_flash_timer = 0.5
+                        if net_session:
+                            # Find the closest worker to assign
+                            from commands import execute_command, BUILDING_CLASSES, BUILDING_COSTS
+                            building_type = state.placement_mode
+                            cost = BUILDING_COSTS.get(building_type, 0)
+                            local_rm = state.resource_manager if local_team == "player" else state.ai_player.resource_manager
+                            if not local_rm.can_afford(cost):
+                                resource_flash_timer = 0.5
+                            else:
+                                workers = [u for u in state.selected_units if isinstance(u, Worker)]
+                                if workers:
+                                    closest = min(workers, key=lambda w: (w.x - bx)**2 + (w.y - by)**2)
+                                    net_session.queue_command({
+                                        "cmd": "place_building",
+                                        "building_type": building_type,
+                                        "x": bx, "y": by,
+                                        "worker_id": closest.net_id,
+                                    })
+                                    state.placement_mode = None
+                        else:
+                            if not state.place_building((bx, by)):
+                                resource_flash_timer = 0.5
                         continue
 
                     # Start drag select
@@ -362,14 +459,24 @@ def main():
                     if not state.selected_units:
                         continue
 
+                    selected_ids = [u.net_id for u in state.selected_units]
+
                     # Check minimap right-click — set waypoint for selected units
                     mini_world = minimap.minimap_to_world(screen_pos)
                     if mini_world is not None:
                         mods = pygame.key.get_mods()
-                        if mods & pygame.KMOD_SHIFT:
-                            state.command_queue_waypoint(mini_world)
+                        if net_session:
+                            cmd_type = "queue_waypoint" if mods & pygame.KMOD_SHIFT else "move"
+                            net_session.queue_command({
+                                "cmd": cmd_type,
+                                "unit_ids": selected_ids,
+                                "x": mini_world[0], "y": mini_world[1],
+                            })
                         else:
-                            state.command_move(mini_world)
+                            if mods & pygame.KMOD_SHIFT:
+                                state.command_queue_waypoint(mini_world)
+                            else:
+                                state.command_move(mini_world)
                         move_markers.append(MoveMarker(mini_world[0], mini_world[1]))
                         continue
 
@@ -385,39 +492,102 @@ def main():
                     repair_target = None
                     if has_workers:
                         # Check friendly units
-                        clicked_unit = state.get_unit_at(world_pos)
-                        if clicked_unit and clicked_unit.alive and clicked_unit.hp < clicked_unit.max_hp and clicked_unit.team == "player":
+                        if net_session:
+                            clicked_unit = state.get_local_unit_at(world_pos, local_team)
+                        else:
+                            clicked_unit = state.get_unit_at(world_pos)
+                        if clicked_unit and clicked_unit.alive and clicked_unit.hp < clicked_unit.max_hp and clicked_unit.team == local_team:
                             repair_target = clicked_unit
                         if not repair_target:
-                            # Check friendly buildings
-                            clicked_bld = state.get_building_at(world_pos)
+                            if net_session:
+                                clicked_bld = state.get_local_building_at(world_pos, local_team)
+                            else:
+                                clicked_bld = state.get_building_at(world_pos)
                             if clicked_bld and clicked_bld.hp > 0 and clicked_bld.hp < clicked_bld.max_hp:
                                 repair_target = clicked_bld
                     if repair_target:
-                        for u in state.selected_units:
-                            if isinstance(u, Worker):
-                                u.assign_to_repair(repair_target)
-                            else:
-                                u.set_target(world_pos)
+                        if net_session:
+                            worker_ids = [u.net_id for u in state.selected_units if isinstance(u, Worker)]
+                            non_worker_ids = [u.net_id for u in state.selected_units if not isinstance(u, Worker)]
+                            if worker_ids:
+                                target_type = "unit" if hasattr(repair_target, 'size') else "building"
+                                net_session.queue_command({
+                                    "cmd": "repair",
+                                    "worker_ids": worker_ids,
+                                    "target_type": target_type,
+                                    "target_id": repair_target.net_id,
+                                })
+                            if non_worker_ids:
+                                net_session.queue_command({
+                                    "cmd": "move",
+                                    "unit_ids": non_worker_ids,
+                                    "x": world_pos[0], "y": world_pos[1],
+                                })
+                        else:
+                            for u in state.selected_units:
+                                if isinstance(u, Worker):
+                                    u.assign_to_repair(repair_target)
+                                else:
+                                    u.set_target(world_pos)
                         move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
 
                     # Check if clicked on a mineral node (world coords)
                     elif (node := state.get_mineral_node_at(world_pos)):
-                        # Send workers to mine, move non-workers normally
-                        if has_workers:
-                            state.command_mine(node)
-                            # Move non-workers to the node area
-                            for u in state.selected_units:
-                                if not isinstance(u, Worker):
-                                    u.set_target(world_pos)
+                        if net_session:
+                            local_nodes = state.get_local_mineral_nodes(local_team)
+                            node_index = None
+                            for idx, n in enumerate(local_nodes):
+                                if n is node:
+                                    node_index = idx
+                                    break
+                            if node_index is not None and has_workers:
+                                worker_ids = [u.net_id for u in state.selected_units if isinstance(u, Worker)]
+                                non_worker_ids = [u.net_id for u in state.selected_units if not isinstance(u, Worker)]
+                                net_session.queue_command({
+                                    "cmd": "mine",
+                                    "unit_ids": worker_ids,
+                                    "node_index": node_index,
+                                })
+                                if non_worker_ids:
+                                    net_session.queue_command({
+                                        "cmd": "move",
+                                        "unit_ids": non_worker_ids,
+                                        "x": world_pos[0], "y": world_pos[1],
+                                    })
+                            else:
+                                net_session.queue_command({
+                                    "cmd": "move",
+                                    "unit_ids": selected_ids,
+                                    "x": world_pos[0], "y": world_pos[1],
+                                })
                         else:
-                            state.command_move(world_pos)
+                            if has_workers:
+                                state.command_mine(node)
+                                for u in state.selected_units:
+                                    if not isinstance(u, Worker):
+                                        u.set_target(world_pos)
+                            else:
+                                state.command_move(world_pos)
                         move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
                     elif mods & pygame.KMOD_SHIFT:
-                        state.command_queue_waypoint(world_pos)
+                        if net_session:
+                            net_session.queue_command({
+                                "cmd": "queue_waypoint",
+                                "unit_ids": selected_ids,
+                                "x": world_pos[0], "y": world_pos[1],
+                            })
+                        else:
+                            state.command_queue_waypoint(world_pos)
                         move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
                     else:
-                        state.command_move(world_pos)
+                        if net_session:
+                            net_session.queue_command({
+                                "cmd": "move",
+                                "unit_ids": selected_ids,
+                                "x": world_pos[0], "y": world_pos[1],
+                            })
+                        else:
+                            state.command_move(world_pos)
                         move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
 
             elif event.type == pygame.MOUSEBUTTONUP:
@@ -428,7 +598,10 @@ def main():
 
                     if drag_rect and (drag_rect.w > 5 or drag_rect.h > 5):
                         # Box select (drag_rect is in world coords)
-                        units = state.get_units_in_rect(drag_rect)
+                        if net_session:
+                            units = state.get_local_units_in_rect(drag_rect, local_team)
+                        else:
+                            units = state.get_units_in_rect(drag_rect)
                         if units:
                             state.select_units(units)
                         else:
@@ -436,11 +609,17 @@ def main():
                     else:
                         # Single click select (use world coords)
                         click_world = drag_start_world if drag_start_world else world_pos
-                        unit = state.get_unit_at(click_world)
+                        if net_session:
+                            unit = state.get_local_unit_at(click_world, local_team)
+                        else:
+                            unit = state.get_unit_at(click_world)
                         if unit:
                             state.select_unit(unit)
                         else:
-                            building = state.get_building_at(click_world)
+                            if net_session:
+                                building = state.get_local_building_at(click_world, local_team)
+                            else:
+                                building = state.get_building_at(click_world)
                             if building:
                                 state.select_building(building)
                             else:
@@ -511,6 +690,37 @@ def main():
 
         # Update
         if not paused:
+            if net_session:
+                import time as _time
+                from commands import execute_command
+                net_session.increment_frame()
+                if net_session.is_tick_frame():
+                    net_session.end_tick_and_send()
+                    net_session.receive_and_process()
+                    # Wait for remote commands
+                    timeout_start = _time.time()
+                    while not net_session.remote_tick_ready:
+                        net_session.receive_and_process()
+                        if not net_session.connected:
+                            running = False
+                            break
+                        if _time.time() - timeout_start > 5.0:
+                            print("Peer timed out!")
+                            running = False
+                            break
+                        _time.sleep(0.001)
+                    if running and net_session.remote_tick_ready:
+                        # Execute local commands
+                        for cmd in net_session.local_commands:
+                            execute_command(cmd, state, local_team)
+                        # Execute remote commands
+                        for cmd in net_session.remote_commands:
+                            execute_command(cmd, state, net_session.remote_team)
+                        net_session.advance_tick()
+                else:
+                    net_session.receive_and_process()
+                    if not net_session.connected:
+                        running = False
             state.update(sim_dt)
             # Update player AI (spectator mode)
             if player_ai is not None:
@@ -532,16 +742,15 @@ def main():
             resource_flash_timer = max(0, resource_flash_timer - dt)
 
         # Detect resource deposits (floating text)
-        current_amount = state.resource_manager.amount
+        current_amount = _local_rm().amount
         if current_amount > last_resource_amount:
             gained = int(current_amount - last_resource_amount)
-            # Find a worker that just deposited (state == "moving_to_mine" means just finished returning)
-            for u in state.units:
+            local_units = state.units if local_team == "player" else state.ai_player.units
+            for u in local_units:
                 if isinstance(u, Worker) and u.state == "moving_to_mine":
                     floating_texts.append(FloatingText(u.x, u.y - 20, f"+{gained}"))
                     break
             else:
-                # Fallback: show near HUD resource area (use world coords at current camera)
                 floating_texts.append(FloatingText(cam_x + 80, cam_y + MAP_HEIGHT - 10, f"+{gained}"))
         last_resource_amount = current_amount
 
@@ -609,7 +818,8 @@ def main():
 
         # Draw placement zones when in placement mode
         if state.placement_mode:
-            for b in state.buildings:
+            local_buildings = state.buildings if local_team == "player" else state.ai_player.buildings
+            for b in local_buildings:
                 if b.hp <= 0:
                     continue
                 bcx = b.x + b.w // 2 - cam_x
@@ -638,7 +848,7 @@ def main():
             # Ghost rect in world coords for validation
             ghost_rect_world = pygame.Rect(
                 world_mx - size[0] // 2, world_my - size[1] // 2, size[0], size[1])
-            valid = _is_placement_valid(ghost_rect_world, state)
+            valid = _is_placement_valid(ghost_rect_world, state, local_team=local_team)
             ghost_color = (0, 255, 0) if valid else (255, 50, 50)
             # Draw at screen position
             ghost_rect_screen = pygame.Rect(mx - size[0] // 2, my - size[1] // 2, size[0], size[1])
@@ -701,7 +911,7 @@ def main():
                 break
 
         # Draw HUD (fixed screen position, no camera offset)
-        hud.draw(screen, state, resource_flash_timer)
+        hud.draw(screen, state, resource_flash_timer, local_team=local_team)
 
         # Draw minimap (fixed screen position, pass camera position)
         minimap.draw(screen, state, camera_x, camera_y)
@@ -740,6 +950,10 @@ def main():
         pygame.display.flip()
     finally:
         recorder.save()
+        if net_session:
+            net_session.close()
+        if net_cleanup:
+            net_cleanup()
 
     pygame.quit()
     sys.exit()
@@ -1045,7 +1259,7 @@ def _get_placement_sprite(mode):
     return None
 
 
-def _is_placement_valid(ghost_rect, state):
+def _is_placement_valid(ghost_rect, state, local_team="player"):
     """Check if a building can be placed at the ghost rect position (world coords)."""
     if ghost_rect.bottom > WORLD_H or ghost_rect.top < 0:
         return False
@@ -1054,29 +1268,26 @@ def _is_placement_valid(ghost_rect, state):
     for existing in state.buildings:
         if ghost_rect.colliderect(existing.rect):
             return False
-    # Check overlap with AI buildings too
     for existing in state.ai_player.buildings:
         if ghost_rect.colliderect(existing.rect):
             return False
     for node in state.mineral_nodes:
         if not node.depleted and ghost_rect.colliderect(node.rect.inflate(10, 10)):
             return False
-    # Check overlap with AI mineral nodes
     for node in state.ai_player.mineral_nodes:
         if not node.depleted and ghost_rect.colliderect(node.rect.inflate(10, 10)):
             return False
+    local_rm = state.resource_manager if local_team == "player" else state.ai_player.resource_manager
     cost = state._placement_cost()
-    if not state.resource_manager.can_afford(cost):
+    if not local_rm.can_afford(cost):
         return False
-    # Check worker is selected
     has_worker = any(isinstance(u, Worker) and u.alive and u.state != "deploying"
                      for u in state.selected_units)
     if not has_worker:
         return False
-    # Check placement zone
     center_x = ghost_rect.centerx
     center_y = ghost_rect.centery
-    if not state.is_in_placement_zone(center_x, center_y):
+    if not state.is_in_placement_zone(center_x, center_y, team=local_team):
         return False
     return True
 
