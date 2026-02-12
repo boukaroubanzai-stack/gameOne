@@ -4,3 +4,4 @@ replay/
 dbug.log
 nul
 *.pyc
+network.txt

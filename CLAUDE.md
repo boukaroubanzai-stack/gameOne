@@ -35,7 +35,7 @@ No tests, linting, or CI/CD exist. `gameplay.txt` is the game design spec.
 - **commands.py** — Serializable command definitions (move, queue_waypoint, mine, place_building, train_unit, repair) and `execute_command()` engine that applies commands to either team's entities.
 - **multiplayer_state.py (`RemotePlayer`)** — Replaces `AIPlayer` in multiplayer. Same data interface (`.buildings`, `.units`, `.mineral_nodes`, `.resource_manager`) but no autonomous AI. All decisions come from the remote player's commands over the network.
 
-**Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over TCP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player).
+**Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over TCP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player). Tick sync is **non-blocking**: if remote commands haven't arrived yet, the UI (rendering, input, camera) keeps running while simulation is paused. State vars `net_waiting` / `net_wait_start` in `game.py` track the wait across frames (5s timeout).
 
 **Entity identification**: All units and buildings have a `net_id` (sequential integer assigned by `GameState` counters). Both peers run the same counter in the same order, so IDs stay in sync. Mineral nodes use their list index. `GameState` maintains `_unit_by_net_id` / `_building_by_net_id` dicts for O(1) lookup.
 
