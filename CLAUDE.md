@@ -37,13 +37,23 @@ No tests, linting, or CI/CD exist. `gameplay.txt` is the game design spec.
 
 **Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over TCP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player).
 
-**Entity identification**: All units and buildings have a `net_id` (sequential integer assigned by `GameState` counters). Both peers run the same counter in the same order, so IDs stay in sync. Mineral nodes use their list index.
+**Entity identification**: All units and buildings have a `net_id` (sequential integer assigned by `GameState` counters). Both peers run the same counter in the same order, so IDs stay in sync. Mineral nodes use their list index. `GameState` maintains `_unit_by_net_id` / `_building_by_net_id` dicts for O(1) lookup.
 
 **Host = "player" team (left side), Joiner = "ai" team (right side)**. Selection, placement zones, HUD resources, and input handling are all `local_team`-aware.
+
+### Shared utilities (utils.py)
+
+Centralised rendering helpers used across all drawing code:
+- `get_font(size)` — cached font lookup (avoids per-frame `SysFont` creation).
+- `tint_surface(surface, color)` — applies orange tint for AI/remote entities.
+- `hp_bar_color(ratio)` — returns green/yellow/red based on HP ratio.
+- `get_range_circle(radius)` — cached semi-transparent range circle surface.
 
 ### Core game loop (game.py)
 
 `game.py` is the entry point containing the Pygame event loop, camera system, all drawing code, multiplayer connection phase, and the replay viewer. All rendering uses camera-offset helper functions (`_draw_unit_offset`, `_draw_building_offset`, etc.) — entities store world coordinates, drawing subtracts `(cam_x, cam_y)`.
+
+Shared drawing helpers eliminate duplication: `_draw_attack_line()`, `_draw_health_bar()`, `_draw_worker_extras()`, `_draw_range_circle()`, `_get_zone_surface()`.
 
 In multiplayer, input events generate command dicts queued via `net_session.queue_command()` instead of directly mutating game state.
 
@@ -102,6 +112,10 @@ All game balance constants are centralized in `settings.py`: screen/world dimens
 ## Key Patterns
 
 - `dt` (delta time in seconds) passed through all `update()` methods. Single-player uses `sim_dt = dt * 2`. Multiplayer uses `sim_dt = dt` (1x speed for determinism).
+- Fonts are cached via `utils.get_font(size)` — never create `pygame.font.SysFont` directly.
+- HP bar colours use `utils.hp_bar_color(ratio)` — never inline the green/yellow/red logic.
+- Range circles use `utils.get_range_circle(radius)` — cached SRCALPHA surfaces.
+- `GameState._cached_all_units` is rebuilt once per frame for collision checks.
 - Selection: either `selected_units` (list) or `selected_building` (single), never both — `deselect_all()` clears both.
 - All coordinates are world-space. Screen↔world conversion via `_screen_to_world()` and camera offsets.
 - `team` attribute on units/buildings: `"player"` or `"ai"`. Wave enemies use `"enemy"`.
