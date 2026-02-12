@@ -4,56 +4,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-RTS (Real-Time Strategy) game built with Pygame. Two sides — player (left) and AI opponent (right) — mine resources, build bases, train armies, and fight. Random natural disasters affect the entire map. Victory: destroy all AI buildings and combat units. Defeat: lose all player units and buildings. Yanuses wave enemies exist but are currently disabled in `waves.py`.
+RTS (Real-Time Strategy) game built with Pygame. Two sides — player (left) and opponent (right) — mine resources, build bases, train armies, and fight. The opponent can be AI (single-player) or a remote human (multiplayer). Random natural disasters affect the entire map. Victory: destroy all opponent buildings and combat units. Defeat: lose all your units and buildings. Yanuses wave enemies exist but are currently disabled in `waves.py`.
 
 ## Commands
 
 ```bash
-pip install -r requirements.txt        # Install dependencies (pygame>=2.5.0)
-python game.py                          # Run the game
-python game.py --playforme              # Spectator mode: AI controls the player side (20x speed)
+pip install -r requirements.txt        # Install dependencies (pygame>=2.5.0, miniupnpc>=2.0.0)
+python game.py                          # Run the game (2x speed, basic AI)
+python game.py --ai <name>              # Select AI profile (basic, defensive, aggressive)
+python game.py --playforme              # Spectator mode: AI controls the player side
 python game.py --replay replay/replay_YYYYMMDD_HHMMSS.json  # Replay viewer
+python game.py --host                   # Host multiplayer game (port 7777)
+python game.py --host 9999              # Host on custom port
+python game.py --join <ip>              # Join multiplayer game
+python game.py --join <ip> 9999         # Join on custom port
 ```
 
-No tests, linting, or CI/CD exist. `gameplay.txt` is the original game design spec.
+No tests, linting, or CI/CD exist. `gameplay.txt` is the game design spec.
 
 ## Architecture
 
-### Two distinct AI systems
+### AI systems
 
-- **ai_player.py (`AIPlayer`)** — The AI opponent on the right side of the map. Has its own `ResourceManager`, buildings, units, and mineral nodes. Draws with orange tint. Handles its own economy, building placement, unit training, combat targeting, scouting, attack waves, focus fire, and retreat logic. Thinks every 1 second.
-- **player_ai.py (`PlayerAI`)** — Only active in `--playforme` spectator mode. Controls the *player's* entities through the same `GameState` API a human would use. Same strategic logic (economy → military → attack phases) but operates on `state.buildings`/`state.units` instead of its own collections.
+- **ai_player.py (`AIPlayer`)** — The AI opponent on the right side of the map. Has its own `ResourceManager`, buildings, units, and mineral nodes. Draws with orange tint. Handles its own economy, building placement, unit training, combat targeting, scouting, attack waves, focus fire, and retreat logic. Configurable via AI profiles in `ai_profiles/`.
+- **player_ai.py (`PlayerAI`)** — Only active in `--playforme` spectator mode. Controls the *player's* entities through the same `GameState` API a human would use.
+
+### Multiplayer system
+
+- **network.py** — TCP connection with length-prefixed JSON message framing, UPnP port mapping via `miniupnpc`, `NetworkHost`/`NetworkClient` for connection setup, `NetSession` for lockstep tick management.
+- **commands.py** — Serializable command definitions (move, queue_waypoint, mine, place_building, train_unit, repair) and `execute_command()` engine that applies commands to either team's entities.
+- **multiplayer_state.py (`RemotePlayer`)** — Replaces `AIPlayer` in multiplayer. Same data interface (`.buildings`, `.units`, `.mineral_nodes`, `.resource_manager`) but no autonomous AI. All decisions come from the remote player's commands over the network.
+
+**Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over TCP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player).
+
+**Entity identification**: All units and buildings have a `net_id` (sequential integer assigned by `GameState` counters). Both peers run the same counter in the same order, so IDs stay in sync. Mineral nodes use their list index.
+
+**Host = "player" team (left side), Joiner = "ai" team (right side)**. Selection, placement zones, HUD resources, and input handling are all `local_team`-aware.
 
 ### Core game loop (game.py)
 
-`game.py` is the entry point containing the Pygame event loop, camera system, all drawing code, and the replay viewer. All rendering uses camera-offset helper functions (`_draw_unit_offset`, `_draw_building_offset`, etc.) — entities store world coordinates, drawing subtracts `(cam_x, cam_y)`.
+`game.py` is the entry point containing the Pygame event loop, camera system, all drawing code, multiplayer connection phase, and the replay viewer. All rendering uses camera-offset helper functions (`_draw_unit_offset`, `_draw_building_offset`, etc.) — entities store world coordinates, drawing subtracts `(cam_x, cam_y)`.
+
+In multiplayer, input events generate command dicts queued via `net_session.queue_command()` instead of directly mutating game state.
 
 ### World & camera
 
-- Viewport: 2000x1200 pixels. HUD: bottom 120px. Map area: top 1080px.
-- World: 10000x5400 pixels, scrollable via mouse-edge (30px margin) or arrow keys.
+- Viewport: 2000x1200 pixels (resizable). HUD: bottom 120px. Map area: top portion.
+- World: 10000x5400 pixels, scrollable via mouse-edge or arrow keys.
 - Camera clamped to world bounds. Earthquake disaster applies shake offset to camera.
 
 ### Game state flow
 
 `GameState` (game_state.py) orchestrates the update loop:
-1. Player units: worker mining state machine, combat auto-targeting against `enemies + ai_player.units`, waypoint movement with collision avoidance.
-2. Enemy (Yanuses) movement with avoidance.
-3. AI unit movement with avoidance.
-4. Stuck detection for all units (0.5s → stuck escape, 1.0s → give up waypoint).
-5. Building production ticks + DefenseTower combat updates.
-6. `WaveManager.update()` and `AIPlayer.update()`.
-7. Dead unit/building removal, win/lose checks.
+1. Handle deploying workers (building construction timer).
+2. Player units: worker mining/repair state machine, combat auto-targeting, waypoint movement with collision avoidance.
+3. Enemy (Yanuses) movement with avoidance.
+4. AI/Remote player unit movement with avoidance.
+5. Stuck detection for all units (0.5s → stuck escape, 1.0s → give up waypoint).
+6. Building production ticks + DefenseTower combat updates.
+7. `WaveManager.update()` and `AIPlayer.update()` (or `RemotePlayer.update()` in multiplayer).
+8. Dead unit/building removal, win/lose checks.
 
 ### Entity model
 
-- **Units** (`units.py`): `Unit` base → `Soldier`, `Tank`, `Worker`, `Yanuses`. All have waypoint movement, HP, selection, combat attributes. `Worker` has a 5-state mining machine: `idle → moving_to_mine → waiting → mining → returning → moving_to_mine`. Only one worker can mine a node at a time.
-- **Buildings** (`buildings.py`): `Building` base → `TownCenter`, `Barracks`, `Factory`, `DefenseTower`. Production buildings have queues with timers. `DefenseTower` has no production — instead has `combat_update()` for auto-targeting enemies in range.
-- **Sprites**: PNG assets in `assets/`, loaded via `load_assets()` classmethods after `pygame.init()`. AI entities use `tint_surface()` (orange overlay) from `ai_player.py`. Note: `tower.png` is missing — `DefenseTower` uses fallback rendered graphics.
+- **Units** (`units.py`): `Unit` base → `Soldier`, `Tank`, `Worker`, `Yanuses`. All have waypoint movement, HP, selection, combat attributes, `net_id`. `Worker` has states: `idle`, `moving_to_mine`, `waiting`, `mining`, `returning`, `deploying`, `repairing`. Workers can repair damaged entities at 5 HP/sec. Only one worker can mine a node at a time. Units have vision range (1.2x attack range) and hunt visible enemies.
+- **Buildings** (`buildings.py`): `Building` base → `TownCenter`, `Barracks`, `Factory`, `DefenseTower`, `Watchguard`. Production buildings have queues with timers. `DefenseTower` has `combat_update()` for auto-targeting. `Watchguard` expands placement zone by 500px and consumes its builder worker. All buildings have `net_id` and `build_time` (construction takes time).
+- **Building HP**: TownCenter=1000, Barracks=400, Factory=400, DefenseTower=1000, Watchguard=400.
+- **Building placement**: Only within 500px of TownCenter/Watchguard or 100px of other buildings.
+- **Sprites**: PNG assets in `assets/`, loaded via `load_assets()` classmethods after `pygame.init()`. AI/remote entities use `tint_surface()` (orange overlay). Note: `tower.png` is missing — `DefenseTower` uses fallback rendered graphics.
 
 ### Collision avoidance
 
-`GameState._move_unit_with_avoidance()` handles all unit movement: tries direct path, then perpendicular/diagonal steering. When destination is blocked, stops adjacent. Two moving units yield by `id()` priority. Used for player units, enemies, and AI units alike.
+`GameState._move_unit_with_avoidance()` handles all unit movement: tries direct path, then perpendicular/diagonal steering. When destination is blocked, stops adjacent. Two moving units yield by `net_id` priority. Used for player units, enemies, and AI units alike.
 
 ### Disasters (disasters.py)
 
@@ -63,9 +85,11 @@ No tests, linting, or CI/CD exist. `gameplay.txt` is the original game design sp
 - **Lightning**: 8s, random bolt strikes every 1-2s (40 damage + 10 splash in 30px).
 - **Toxic cloud**: 12s, drifts across map, 5 damage/sec in 200px radius.
 
+In multiplayer, disasters are deterministic via shared random seed.
+
 ### Replay system (replay.py)
 
-`ReplayRecorder` captures state snapshots every 100ms as JSON lines in `replay/`. Always active via `atexit`. `ReplayPlayer` loads and plays back with speed control, timeline seeking, and pause. Proxy classes (`ReplayUnit`, `ReplayBuilding`, `ReplayNode`, `ReplayAIPlayer`, `ReplayState`) satisfy the drawing functions' attribute requirements.
+`ReplayRecorder` captures state snapshots every 100ms as JSON lines in `replay/`. Always active via `atexit`. `ReplayPlayer` loads and plays back with speed control, timeline seeking, and pause.
 
 ### Mineral node distribution
 
@@ -73,25 +97,28 @@ Both player and AI use shared `MINERAL_OFFSETS` from settings. Player nodes: `PL
 
 ### Configuration (settings.py)
 
-All game balance constants are centralized in `settings.py`: screen/world dimensions, unit costs and stats (HP, damage, speed, range, train time), building costs and HP, mineral node offsets and capacity, starting resources, FPS cap, colors, and asset paths. Modify this file to tweak game balance.
+All game balance constants are centralized in `settings.py`: screen/world dimensions, unit costs and stats (HP, damage, speed, range, train time), building costs, HP, and build times, mineral node offsets and capacity, starting resources, FPS cap, colors, asset paths, multiplayer port, and tick interval.
 
 ## Key Patterns
 
-- `dt` (delta time in seconds) passed through all `update()` methods. `--playforme` mode uses `sim_dt = dt * 20` for fast simulation.
+- `dt` (delta time in seconds) passed through all `update()` methods. Single-player uses `sim_dt = dt * 2`. Multiplayer uses `sim_dt = dt` (1x speed for determinism).
 - Selection: either `selected_units` (list) or `selected_building` (single), never both — `deselect_all()` clears both.
 - All coordinates are world-space. Screen↔world conversion via `_screen_to_world()` and camera offsets.
 - `team` attribute on units/buildings: `"player"` or `"ai"`. Wave enemies use `"enemy"`.
+- `local_team` variable in game.py: `"player"` for host/single-player, `"ai"` for joiner. Used for team-aware selection, placement, HUD, and commands.
 - Debug: press P to pause and dump full game state to `dbug.log`.
 
 ## Controls
 
 | Input | Action |
 |-------|--------|
-| T / B / F / D | Place Town Center / Barracks / Factory / Defense Tower |
+| T / B / F / D / G | Place Town Center / Barracks / Factory / Defense Tower / Watchguard |
 | Left click | Place building / select unit or building / click minimap |
 | Left drag | Box-select units / drag minimap to pan |
 | Right click ground | Move selected units |
 | Right click mineral node | Send selected workers to mine |
+| Right click damaged friendly | Send selected workers to repair |
+| Right click in placement mode | Cancel placement |
 | Shift + Right click | Add waypoint |
 | Arrow keys | Scroll camera |
 | P | Pause + write dbug.log |
