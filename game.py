@@ -308,6 +308,15 @@ def main():
 
     playforme_timer = 0.0  # auto-exit timer for playforme mode
 
+    # Non-blocking net sync state
+    net_waiting = False    # True while waiting for remote tick commands
+    net_wait_start = 0.0   # time.time() when waiting started
+
+    # Pre-import for multiplayer (avoid re-importing every frame)
+    if net_session:
+        import time as _time
+        from commands import execute_command
+
     running = True
     try:
      while running:
@@ -691,46 +700,53 @@ def main():
 
         # Update
         if not paused:
+            # --- Multiplayer tick sync (non-blocking) ---
             if net_session:
-                import time as _time
-                from commands import execute_command
-                net_session.increment_frame()
-                if net_session.is_tick_frame():
-                    net_session.end_tick_and_send()
-                    net_session.receive_and_process()
-                    # Wait for remote commands
-                    timeout_start = _time.time()
-                    while not net_session.remote_tick_ready:
-                        net_session.receive_and_process()
-                        if not net_session.connected:
-                            running = False
-                            break
-                        if _time.time() - timeout_start > 5.0:
-                            print("Peer timed out!")
-                            running = False
-                            break
-                        _time.sleep(0.001)
-                    if running and net_session.remote_tick_ready:
-                        # Execute local commands
-                        for cmd in net_session.local_commands:
-                            execute_command(cmd, state, local_team)
-                        # Execute remote commands
-                        for cmd in net_session.remote_commands:
-                            execute_command(cmd, state, net_session.remote_team)
-                        net_session.advance_tick()
-                else:
+                if net_waiting:
+                    # Poll for remote commands without blocking
                     net_session.receive_and_process()
                     if not net_session.connected:
                         running = False
-            state.update(sim_dt)
-            # Update player AI (spectator mode)
-            if player_ai is not None:
-                player_ai.update(sim_dt, state, state.wave_manager.enemies, state.ai_player)
-            # Update disasters (affects all units and buildings on the map)
-            all_units_for_disaster = state.units + state.wave_manager.enemies + state.ai_player.units
-            all_buildings_for_disaster = state.buildings + state.ai_player.buildings
-            disaster_mgr.update(sim_dt, all_units_for_disaster, all_buildings_for_disaster)
-            recorder.capture(dt, state)
+                    elif net_session.remote_tick_ready:
+                        for cmd in net_session.local_commands:
+                            execute_command(cmd, state, local_team)
+                        for cmd in net_session.remote_commands:
+                            execute_command(cmd, state, net_session.remote_team)
+                        net_session.advance_tick()
+                        net_waiting = False
+                    elif _time.time() - net_wait_start > 5.0:
+                        print("Peer timed out!")
+                        running = False
+                else:
+                    net_session.increment_frame()
+                    if net_session.is_tick_frame():
+                        net_session.end_tick_and_send()
+                        net_session.receive_and_process()
+                        if not net_session.connected:
+                            running = False
+                        elif net_session.remote_tick_ready:
+                            for cmd in net_session.local_commands:
+                                execute_command(cmd, state, local_team)
+                            for cmd in net_session.remote_commands:
+                                execute_command(cmd, state, net_session.remote_team)
+                            net_session.advance_tick()
+                        else:
+                            net_waiting = True
+                            net_wait_start = _time.time()
+                    else:
+                        net_session.receive_and_process()
+                        if not net_session.connected:
+                            running = False
+
+            # Only advance simulation when not waiting for remote peer
+            if not net_waiting:
+                state.update(sim_dt)
+                if player_ai is not None:
+                    player_ai.update(sim_dt, state, state.wave_manager.enemies, state.ai_player)
+                all_units_for_disaster = state.units + state.wave_manager.enemies + state.ai_player.units
+                all_buildings_for_disaster = state.buildings + state.ai_player.buildings
+                disaster_mgr.update(sim_dt, all_units_for_disaster, all_buildings_for_disaster)
+                recorder.capture(dt, state)
 
         # Update UX effects
         for m in move_markers:
