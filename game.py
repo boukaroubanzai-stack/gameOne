@@ -1178,23 +1178,31 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
             continue
         # Health bar and label
         if building.selected:
+            from settings import SELECT_COLOR
             r = pygame.Rect(ox, oy, building.w, building.h)
-            pygame.draw.rect(surface, (255, 120, 0), r.inflate(6, 6), 2)
+            pygame.draw.rect(surface, SELECT_COLOR, r.inflate(6, 6), 2)
         bar_w = building.w
         bar_h = 4
         bx, by = ox, oy - 8
         pygame.draw.rect(surface, (80, 0, 0), (bx, by, bar_w, bar_h))
         fill_w = int(bar_w * (building.hp / building.max_hp))
-        pygame.draw.rect(surface, (255, 140, 0), (bx, by, fill_w, bar_h))
+        hp_ratio = building.hp / building.max_hp
+        if hp_ratio > 0.5:
+            bar_color = (0, 200, 0)
+        elif hp_ratio > 0.25:
+            bar_color = (255, 200, 0)
+        else:
+            bar_color = (255, 50, 50)
+        pygame.draw.rect(surface, bar_color, (bx, by, fill_w, bar_h))
         font = pygame.font.SysFont(None, 18)
-        label = font.render(f"AI {building.label}", True, (255, 180, 100))
+        label = font.render(building.label, True, (255, 180, 100))
         label_rect = label.get_rect(center=(ox + building.w // 2, oy - 16))
         surface.blit(label, label_rect)
         if building.production_queue:
             prog_y = oy + building.h + 2
             pygame.draw.rect(surface, (60, 60, 60), (ox, prog_y, building.w, 4))
             prog = building.production_progress
-            pygame.draw.rect(surface, (255, 140, 0),
+            pygame.draw.rect(surface, (0, 180, 255),
                              (ox, prog_y, int(building.w * prog), 4))
 
     # AI units
@@ -1210,6 +1218,17 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
         else:
             _draw_unit_offset(surface, unit, cam_x, cam_y)
             continue
+        # Selection highlight
+        if unit.selected:
+            from settings import SELECT_COLOR
+            sel_rect = pygame.Rect(sx - unit.size - 2, sy - unit.size - 2,
+                                   unit.size * 2 + 4, unit.size * 2 + 4)
+            pygame.draw.rect(surface, SELECT_COLOR, sel_rect, 1)
+            if unit.attack_range > 0:
+                rr = int(unit.attack_range)
+                range_surf = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
+                pygame.draw.circle(range_surf, (100, 100, 140, 80), (rr, rr), rr, 1)
+                surface.blit(range_surf, (sx - rr, sy - rr))
         # Health bar
         bar_w = unit.size * 2
         bar_h = 3
@@ -1218,6 +1237,25 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
         pygame.draw.rect(surface, (80, 0, 0), (bx, by, bar_w, bar_h))
         fill_w = int(bar_w * (unit.hp / unit.max_hp))
         pygame.draw.rect(surface, (255, 140, 0), (bx, by, fill_w, bar_h))
+        # Worker-specific drawing
+        if isinstance(unit, Worker):
+            if unit.carry_amount > 0:
+                pygame.draw.circle(surface, (255, 215, 0),
+                                   (sx + unit.size, sy - unit.size), 4)
+            if unit.selected and unit.state != "idle":
+                font = pygame.font.SysFont(None, 14)
+                state_text = unit.state.replace("_", " ")
+                label = font.render(state_text, True, (200, 200, 200))
+                surface.blit(label, (sx - unit.size, sy + unit.size + 2))
+            if unit.state == "deploying" and unit.deploy_building and unit.deploy_building_class:
+                build_time = unit.deploy_building_class.build_time
+                progress = min(unit.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
+                prog_w = unit.size * 3
+                prog_h = 3
+                px = sx - prog_w // 2
+                py = sy + unit.size + 14
+                pygame.draw.rect(surface, (60, 60, 60), (px, py, prog_w, prog_h))
+                pygame.draw.rect(surface, (0, 180, 255), (px, py, int(prog_w * progress), prog_h))
 
     # AI attack lines
     for ai_unit in ai_player.units:
