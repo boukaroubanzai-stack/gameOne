@@ -943,6 +943,10 @@ def main():
             sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
             screen.blit(sub, sub_rect)
 
+        # FPS counter (top-right corner)
+        fps_text = get_font(18).render(f"{int(clock.get_fps())} f/s", True, (200, 200, 200))
+        screen.blit(fps_text, (WIDTH - fps_text.get_width() - 10, 10))
+
         pygame.display.flip()
     finally:
         recorder.save()
