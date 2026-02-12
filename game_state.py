@@ -2,15 +2,16 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
 from units import Worker, Soldier, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
 from ai_player import AIPlayer
 from settings import (
     WORLD_W, WORLD_H, STARTING_WORKERS,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
     PLAYER_TC_POS,
+    BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
 
 
@@ -103,25 +104,53 @@ class GameState:
         return best
 
     def command_mine(self, node):
+        # Check that at least one town center exists
         tc = self._find_nearest_town_center(node.x, node.y)
         if tc is None:
             return
         for unit in self.selected_units:
             if isinstance(unit, Worker):
-                unit.assign_to_mine(node, tc, self.resource_manager)
+                refund = unit.cancel_deploy()
+                if refund > 0:
+                    self.resource_manager.deposit(refund)
+                unit.assign_to_mine(node, self.buildings, self.resource_manager)
+
+    def is_in_placement_zone(self, x, y):
+        """Check if position (x, y) is within a valid building placement zone."""
+        for b in self.buildings:
+            if b.hp <= 0:
+                continue
+            cx, cy = b.x + b.w // 2, b.y + b.h // 2
+            dist = math.hypot(x - cx, y - cy)
+            if isinstance(b, TownCenter):
+                if dist <= BUILDING_ZONE_TC_RADIUS:
+                    return True
+            elif isinstance(b, Watchguard):
+                if dist <= WATCHGUARD_ZONE_RADIUS:
+                    return True
+            else:
+                if dist <= BUILDING_ZONE_BUILDING_RADIUS:
+                    return True
+        return False
 
     def place_building(self, pos):
         x, y = pos
+        # Determine building class from placement mode
         if self.placement_mode == "barracks":
-            b = Barracks(x, y)
+            building_class = Barracks
         elif self.placement_mode == "factory":
-            b = Factory(x, y)
+            building_class = Factory
         elif self.placement_mode == "towncenter":
-            b = TownCenter(x, y)
+            building_class = TownCenter
         elif self.placement_mode == "tower":
-            b = DefenseTower(x, y)
+            building_class = DefenseTower
+        elif self.placement_mode == "watchguard":
+            building_class = Watchguard
         else:
             return False
+
+        # Create temporary building for validation
+        b = building_class(x, y)
 
         # Check building fits within world area
         if b.rect.bottom > WORLD_H or b.rect.top < 0:
@@ -139,12 +168,30 @@ class GameState:
             if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
                 return False
 
+        # Check placement zone
+        center_x = x + b.w // 2
+        center_y = y + b.h // 2
+        if not self.is_in_placement_zone(center_x, center_y):
+            return False
+
+        # Need a selected worker that isn't already deploying
+        workers = [u for u in self.selected_units
+                   if isinstance(u, Worker) and u.alive and u.state != "deploying"]
+        if not workers:
+            return False
+
         cost = self._placement_cost()
-        if self.resource_manager.spend(cost):
-            self.buildings.append(b)
-            self.placement_mode = None
-            return True
-        return False
+        if not self.resource_manager.can_afford(cost):
+            return False
+
+        self.resource_manager.spend(cost)
+
+        # Send closest worker to deploy
+        closest = min(workers, key=lambda w: w.distance_to(center_x, center_y))
+        closest.assign_to_deploy(building_class, (x, y), cost)
+
+        self.placement_mode = None
+        return True
 
     def _placement_cost(self):
         if self.placement_mode == "barracks":
@@ -155,14 +202,24 @@ class GameState:
             return TOWN_CENTER_COST
         elif self.placement_mode == "tower":
             return TOWER_COST
+        elif self.placement_mode == "watchguard":
+            return WATCHGUARD_COST
         return 0
 
     def command_move(self, pos):
         for unit in self.selected_units:
+            if isinstance(unit, Worker):
+                refund = unit.cancel_deploy()
+                if refund > 0:
+                    self.resource_manager.deposit(refund)
             unit.set_target(pos)
 
     def command_queue_waypoint(self, pos):
         for unit in self.selected_units:
+            if isinstance(unit, Worker):
+                refund = unit.cancel_deploy()
+                if refund > 0:
+                    self.resource_manager.deposit(refund)
             unit.add_waypoint(pos)
 
     def _place_unit_at_free_spot(self, unit):
@@ -300,9 +357,63 @@ class GameState:
 
         # Completely blocked from all directions — stay put this frame
 
+    def _handle_deploying_workers(self, dt):
+        """Check for player workers that have arrived at their deploy target."""
+        for unit in self.units:
+            if not isinstance(unit, Worker) or unit.state != "deploying" or unit.waypoints:
+                continue
+            # Worker has arrived (waypoints cleared) — start or continue building
+            if not unit.deploy_building:
+                unit.deploy_building = True
+                unit.deploy_build_timer = 0.0
+
+            unit.deploy_build_timer += dt
+            build_time = unit.deploy_building_class.build_time
+            if unit.deploy_build_timer < build_time:
+                continue  # Still constructing
+
+            # Construction complete
+            bx, by = unit.deploy_target
+            building_class = unit.deploy_building_class
+            cost = unit.deploy_cost
+
+            b = building_class(bx, by)
+            valid = True
+            if b.rect.bottom > WORLD_H or b.rect.top < 0 or b.rect.left < 0 or b.rect.right > WORLD_W:
+                valid = False
+            if valid:
+                for existing in self.buildings + self.ai_player.buildings:
+                    if b.rect.colliderect(existing.rect):
+                        valid = False
+                        break
+            if valid:
+                for node in self.mineral_nodes + self.ai_player.mineral_nodes:
+                    if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
+                        valid = False
+                        break
+
+            if valid:
+                self.buildings.append(b)
+                if isinstance(b, Watchguard):
+                    # Watchguard consumes the worker
+                    unit.hp = 0
+                    continue
+            else:
+                self.resource_manager.deposit(cost)
+
+            unit.state = "idle"
+            unit.deploy_building_class = None
+            unit.deploy_target = None
+            unit.deploy_cost = 0
+            unit.deploy_build_timer = 0.0
+            unit.deploy_building = False
+
     def update(self, dt):
         if self.game_over:
             return
+
+        # Handle deploying workers (create buildings when they arrive)
+        self._handle_deploying_workers(dt)
 
         enemies = self.wave_manager.enemies
         # Combine wave enemies and AI units as hostile to player
@@ -344,11 +455,46 @@ class GameState:
                 if isinstance(unit, (Soldier, Tank)):
                     target = unit.find_target(all_hostiles, self.ai_player.buildings)
                     if target:
+                        unit.hunting_target = None
                         unit.target_enemy = target
                         unit.attacking = True
                         unit.fire_cooldown = 0.0
                         unit.try_attack(dt)
                         continue
+                    # Vision hunting: chase enemies visible but out of firing range
+                    # Only hunt if the unit has no player-issued waypoints
+                    if not unit.waypoints or unit.hunting_target:
+                        if unit.hunting_target:
+                            # Already hunting — check target still valid
+                            ht = unit.hunting_target
+                            alive = (hasattr(ht, 'alive') and ht.alive) or \
+                                    (hasattr(ht, 'hp') and ht.hp > 0)
+                            if alive:
+                                if hasattr(ht, 'size'):
+                                    hx, hy = ht.x, ht.y
+                                else:
+                                    hx, hy = ht.x + ht.w // 2, ht.y + ht.h // 2
+                                dist = unit.distance_to(hx, hy)
+                                if dist <= unit.vision_range:
+                                    # Update waypoint to track moving target
+                                    unit.waypoints = [(hx, hy)]
+                                else:
+                                    # Target left vision range
+                                    unit.hunting_target = None
+                                    unit.waypoints = []
+                            else:
+                                unit.hunting_target = None
+                                unit.waypoints = []
+                        else:
+                            # Look for a new target in vision range
+                            visible = unit.find_visible_target(all_hostiles, self.ai_player.buildings)
+                            if visible:
+                                unit.hunting_target = visible
+                                if hasattr(visible, 'size'):
+                                    hx, hy = visible.x, visible.y
+                                else:
+                                    hx, hy = visible.x + visible.w // 2, visible.y + visible.h // 2
+                                unit.waypoints = [(hx, hy)]
                 if unit.waypoints:
                     self._move_unit_with_avoidance(unit, dt)
                 else:
@@ -409,9 +555,10 @@ class GameState:
             if u in self.selected_units:
                 self.selected_units.remove(u)
                 u.selected = False
-            # Release mining node if worker
+            # Release mining node / cancel deployment if worker
             if isinstance(u, Worker):
                 u.cancel_mining()
+                u.cancel_deploy()  # cost lost on death
         self.units = [u for u in self.units if u.alive]
 
         # Remove dead buildings

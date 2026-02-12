@@ -2,16 +2,18 @@ import atexit
 import pygame
 import sys
 import datetime
+import settings
 from settings import (
     WIDTH, HEIGHT, FPS, MAP_COLOR, MAP_HEIGHT, DRAG_BOX_COLOR,
-    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE,
+    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, WATCHGUARD_SIZE,
     WORLD_W, WORLD_H, SCROLL_SPEED, SCROLL_EDGE,
+    BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
 from game_state import GameState
 from hud import HUD
 from minimap import Minimap
 from units import Soldier, Tank, Worker, Yanuses
-from buildings import Barracks, Factory, TownCenter, DefenseTower
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
 from disasters import DisasterManager
 from player_ai import PlayerAI
 from replay import (
@@ -155,6 +157,7 @@ def _screen_to_world(screen_pos, cam_x, cam_y):
 
 
 def main():
+    global WIDTH, HEIGHT, MAP_HEIGHT
     # Check for replay mode
     replay_file = None
     for i, arg in enumerate(sys.argv):
@@ -178,7 +181,7 @@ def main():
     ai_profile = load_profile(ai_profile_name)
 
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("GameOne - Simple RTS" + (" [SPECTATOR]" if playforme else ""))
     clock = pygame.time.Clock()
 
@@ -231,7 +234,7 @@ def main():
     try:
      while running:
         dt = clock.tick(FPS) / 1000.0
-        sim_dt = dt * 20 if playforme else dt * 2
+        sim_dt = dt * 2
 
         # Auto-exit playforme after game over (give 2s for final frames)
         if playforme and state.game_over:
@@ -243,6 +246,17 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+
+            if event.type == pygame.VIDEORESIZE:
+                WIDTH = event.w
+                HEIGHT = event.h
+                MAP_HEIGHT = HEIGHT - settings.HUD_HEIGHT
+                settings.WIDTH = WIDTH
+                settings.HEIGHT = HEIGHT
+                settings.MAP_HEIGHT = MAP_HEIGHT
+                screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                minimap.resize()
+                hud.resize()
 
             # When game is over, only allow quit and ESC
             if state.game_over:
@@ -266,14 +280,23 @@ def main():
                         state.placement_mode = None
                     else:
                         state.deselect_all()
-                elif event.key == pygame.K_b:
-                    state.placement_mode = "barracks"
-                elif event.key == pygame.K_f:
-                    state.placement_mode = "factory"
-                elif event.key == pygame.K_t:
-                    state.placement_mode = "towncenter"
-                elif event.key == pygame.K_d:
-                    state.placement_mode = "tower"
+                elif event.key in (pygame.K_b, pygame.K_f, pygame.K_t, pygame.K_d, pygame.K_g):
+                    has_worker = any(isinstance(u, Worker) for u in state.selected_units)
+                    if has_worker:
+                        if event.key == pygame.K_b:
+                            state.placement_mode = "barracks"
+                        elif event.key == pygame.K_f:
+                            state.placement_mode = "factory"
+                        elif event.key == pygame.K_t:
+                            state.placement_mode = "towncenter"
+                        elif event.key == pygame.K_d:
+                            state.placement_mode = "tower"
+                        elif event.key == pygame.K_g:
+                            state.placement_mode = "watchguard"
+                    else:
+                        floating_texts.append(FloatingText(
+                            camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
+                            "Select a worker first!", (255, 80, 80)))
                 # Arrow key scrolling
                 elif event.key == pygame.K_LEFT:
                     scroll_left = True
@@ -332,19 +355,55 @@ def main():
                     drag_rect_screen = None
 
                 elif event.button == 3:  # Right click
+                    if state.placement_mode:
+                        state.placement_mode = None
+                        continue
                     screen_pos = event.pos
-                    if hud.is_in_hud(screen_pos) or not state.selected_units:
+                    if not state.selected_units:
+                        continue
+
+                    # Check minimap right-click — set waypoint for selected units
+                    mini_world = minimap.minimap_to_world(screen_pos)
+                    if mini_world is not None:
+                        mods = pygame.key.get_mods()
+                        if mods & pygame.KMOD_SHIFT:
+                            state.command_queue_waypoint(mini_world)
+                        else:
+                            state.command_move(mini_world)
+                        move_markers.append(MoveMarker(mini_world[0], mini_world[1]))
+                        continue
+
+                    if hud.is_in_hud(screen_pos):
                         continue
 
                     # Convert to world coords
                     world_pos = _screen_to_world(screen_pos, camera_x, camera_y)
                     mods = pygame.key.get_mods()
 
+                    # Check if right-clicked a damaged friendly unit or building (repair)
+                    has_workers = any(isinstance(u, Worker) for u in state.selected_units)
+                    repair_target = None
+                    if has_workers:
+                        # Check friendly units
+                        clicked_unit = state.get_unit_at(world_pos)
+                        if clicked_unit and clicked_unit.alive and clicked_unit.hp < clicked_unit.max_hp and clicked_unit.team == "player":
+                            repair_target = clicked_unit
+                        if not repair_target:
+                            # Check friendly buildings
+                            clicked_bld = state.get_building_at(world_pos)
+                            if clicked_bld and clicked_bld.hp > 0 and clicked_bld.hp < clicked_bld.max_hp:
+                                repair_target = clicked_bld
+                    if repair_target:
+                        for u in state.selected_units:
+                            if isinstance(u, Worker):
+                                u.assign_to_repair(repair_target)
+                            else:
+                                u.set_target(world_pos)
+                        move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
+
                     # Check if clicked on a mineral node (world coords)
-                    node = state.get_mineral_node_at(world_pos)
-                    if node:
+                    elif (node := state.get_mineral_node_at(world_pos)):
                         # Send workers to mine, move non-workers normally
-                        has_workers = any(isinstance(u, Worker) for u in state.selected_units)
                         if has_workers:
                             state.command_mine(node)
                             # Move non-workers to the node area
@@ -420,17 +479,16 @@ def main():
 
         # --- Camera scrolling ---
         if not paused and not state.game_over:
-            # Mouse-edge scrolling (only when mouse is in map area)
+            # Mouse-edge scrolling
             mouse_x, mouse_y = pygame.mouse.get_pos()
-            if mouse_y < MAP_HEIGHT:
-                if mouse_x < SCROLL_EDGE:
-                    camera_x -= SCROLL_SPEED * dt
-                elif mouse_x > WIDTH - SCROLL_EDGE:
-                    camera_x += SCROLL_SPEED * dt
-                if mouse_y < SCROLL_EDGE:
-                    camera_y -= SCROLL_SPEED * dt
-                elif mouse_y > MAP_HEIGHT - SCROLL_EDGE:
-                    camera_y += SCROLL_SPEED * dt
+            if mouse_x < SCROLL_EDGE:
+                camera_x -= SCROLL_SPEED * dt
+            elif mouse_x > WIDTH - SCROLL_EDGE:
+                camera_x += SCROLL_SPEED * dt
+            if mouse_y < SCROLL_EDGE:
+                camera_y -= SCROLL_SPEED * dt
+            elif mouse_y > HEIGHT - SCROLL_EDGE:
+                camera_y += SCROLL_SPEED * dt
 
             # Keyboard scrolling
             if scroll_left:
@@ -548,6 +606,27 @@ def main():
 
         # Draw disaster effects (with camera offset)
         disaster_mgr.draw(screen, cam_x, cam_y)
+
+        # Draw placement zones when in placement mode
+        if state.placement_mode:
+            for b in state.buildings:
+                if b.hp <= 0:
+                    continue
+                bcx = b.x + b.w // 2 - cam_x
+                bcy = b.y + b.h // 2 - cam_y
+                if isinstance(b, TownCenter):
+                    radius = BUILDING_ZONE_TC_RADIUS
+                elif isinstance(b, Watchguard):
+                    radius = WATCHGUARD_ZONE_RADIUS
+                else:
+                    radius = BUILDING_ZONE_BUILDING_RADIUS
+                # Only draw if the circle is at least partially on screen
+                if bcx + radius < 0 or bcx - radius > WIDTH or bcy + radius < 0 or bcy - radius > MAP_HEIGHT:
+                    continue
+                zone_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(zone_surf, (100, 200, 100, 30), (radius, radius), radius)
+                pygame.draw.circle(zone_surf, (100, 200, 100, 60), (radius, radius), radius, 1)
+                screen.blit(zone_surf, (int(bcx - radius), int(bcy - radius)))
 
         # Draw placement ghost (green=valid, red=invalid) — follows mouse in screen space
         if state.placement_mode:
@@ -850,6 +929,16 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
             state_text = unit.state.replace("_", " ")
             label = font.render(state_text, True, (200, 200, 200))
             surface.blit(label, (sx - unit.size, sy + unit.size + 2))
+        # Construction progress bar when building
+        if unit.state == "deploying" and unit.deploy_building and unit.deploy_building_class:
+            build_time = unit.deploy_building_class.build_time
+            progress = min(unit.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
+            prog_w = unit.size * 3
+            prog_h = 3
+            px = sx - prog_w // 2
+            py = sy + unit.size + 14
+            pygame.draw.rect(surface, (60, 60, 60), (px, py, prog_w, prog_h))
+            pygame.draw.rect(surface, (0, 180, 255), (px, py, int(prog_w * progress), prog_h))
 
 
 def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
@@ -937,6 +1026,8 @@ def _get_placement_size(mode):
         return TOWN_CENTER_SIZE
     elif mode == "tower":
         return TOWER_SIZE
+    elif mode == "watchguard":
+        return WATCHGUARD_SIZE
     return (64, 64)
 
 
@@ -949,6 +1040,8 @@ def _get_placement_sprite(mode):
         return TownCenter.sprite
     elif mode == "tower":
         return DefenseTower.sprite
+    elif mode == "watchguard":
+        return Watchguard.sprite
     return None
 
 
@@ -975,13 +1068,24 @@ def _is_placement_valid(ghost_rect, state):
     cost = state._placement_cost()
     if not state.resource_manager.can_afford(cost):
         return False
+    # Check worker is selected
+    has_worker = any(isinstance(u, Worker) and u.alive and u.state != "deploying"
+                     for u in state.selected_units)
+    if not has_worker:
+        return False
+    # Check placement zone
+    center_x = ghost_rect.centerx
+    center_y = ghost_rect.centery
+    if not state.is_in_placement_zone(center_x, center_y):
+        return False
     return True
 
 
 def _replay_main(filename):
     """Run the replay viewer."""
+    global WIDTH, HEIGHT, MAP_HEIGHT
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("GameOne - Replay")
     clock = pygame.time.Clock()
 
@@ -1024,6 +1128,15 @@ def _replay_main(filename):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.VIDEORESIZE:
+                WIDTH = event.w
+                HEIGHT = event.h
+                MAP_HEIGHT = HEIGHT - settings.HUD_HEIGHT
+                settings.WIDTH = WIDTH
+                settings.HEIGHT = HEIGHT
+                settings.MAP_HEIGHT = MAP_HEIGHT
+                screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                minimap.resize()
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
@@ -1073,15 +1186,14 @@ def _replay_main(filename):
 
         # Camera scrolling
         mouse_x, mouse_y = pygame.mouse.get_pos()
-        if mouse_y < MAP_HEIGHT:
-            if mouse_x < SCROLL_EDGE:
-                camera_x -= SCROLL_SPEED * dt
-            elif mouse_x > WIDTH - SCROLL_EDGE:
-                camera_x += SCROLL_SPEED * dt
-            if mouse_y < SCROLL_EDGE:
-                camera_y -= SCROLL_SPEED * dt
-            elif mouse_y > MAP_HEIGHT - SCROLL_EDGE:
-                camera_y += SCROLL_SPEED * dt
+        if mouse_x < SCROLL_EDGE:
+            camera_x -= SCROLL_SPEED * dt
+        elif mouse_x > WIDTH - SCROLL_EDGE:
+            camera_x += SCROLL_SPEED * dt
+        if mouse_y < SCROLL_EDGE:
+            camera_y -= SCROLL_SPEED * dt
+        elif mouse_y > HEIGHT - SCROLL_EDGE:
+            camera_y += SCROLL_SPEED * dt
         if scroll_left:
             camera_x -= SCROLL_SPEED * dt
         if scroll_right:

@@ -119,13 +119,13 @@ class PlayerAI:
                 if unit.state == "idle":
                     node = self._find_best_mineral_node(state, unit)
                     if node:
-                        unit.assign_to_mine(node, tc, state.resource_manager)
+                        unit.assign_to_mine(node, state.buildings, state.resource_manager)
                 elif unit.state == "waiting":
                     # Worker stuck waiting — reassign to a different node
                     node = self._find_best_mineral_node(state, unit)
                     if node and node is not unit.assigned_node:
                         unit.cancel_mining()
-                        unit.assign_to_mine(node, tc, state.resource_manager)
+                        unit.assign_to_mine(node, state.buildings, state.resource_manager)
 
     # --- Building placement ---
 
@@ -182,32 +182,21 @@ class PlayerAI:
         return None
 
     def _try_place_building(self, state, building_class, cost, size):
-        """Place a building by temporarily setting placement_mode on the state."""
+        """Place a building by sending an idle worker to deploy it."""
         if not state.resource_manager.can_afford(cost):
+            return False
+        # Find an idle worker
+        idle_workers = [u for u in state.units
+                        if isinstance(u, Worker) and u.alive and u.state == "idle"]
+        if not idle_workers:
             return False
         pos = self._find_building_placement(state, size)
         if pos is None:
             return False
-
-        # Determine the placement mode string
-        if building_class is Barracks:
-            mode = "barracks"
-        elif building_class is Factory:
-            mode = "factory"
-        elif building_class is TownCenter:
-            mode = "towncenter"
-        elif building_class is DefenseTower:
-            mode = "tower"
-        else:
-            return False
-
-        # Save and restore placement_mode so we don't disrupt the player
-        old_mode = state.placement_mode
-        state.placement_mode = mode
-        success = state.place_building(pos)
-        if not success:
-            state.placement_mode = old_mode
-        return success
+        state.resource_manager.spend(cost)
+        closest = min(idle_workers, key=lambda w: math.hypot(w.x - pos[0], w.y - pos[1]))
+        closest.assign_to_deploy(building_class, pos, cost)
+        return True
 
     def _try_train_unit(self, building, resource_mgr):
         unit_class, cost, train_time = building.can_train()

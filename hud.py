@@ -1,8 +1,9 @@
 import pygame
+import settings
 from settings import (
-    WIDTH, HEIGHT, HUD_HEIGHT, MAP_HEIGHT,
+    HUD_HEIGHT,
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
     SOLDIER_COST, TANK_COST, WORKER_COST,
     TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL,
 )
@@ -15,6 +16,7 @@ SOLDIER_ACCENT = (50, 120, 220)
 TANK_ACCENT = (100, 100, 100)
 WORKER_ACCENT = (180, 140, 60)
 TOWER_ACCENT = (120, 120, 140)
+WATCHGUARD_ACCENT = (140, 110, 60)
 
 
 class HUD:
@@ -29,15 +31,19 @@ class HUD:
             self.font = pygame.font.SysFont(None, 24)
             self.small_font = pygame.font.SysFont(None, 18)
 
+    def resize(self):
+        self._init_buttons()
+
     def _init_buttons(self):
         btn_w, btn_h = 100, 36
-        y = MAP_HEIGHT + 15
+        y = settings.MAP_HEIGHT + 15
         self.buttons = {
             "towncenter": pygame.Rect(280, y, btn_w, btn_h),
             "barracks": pygame.Rect(390, y, btn_w, btn_h),
             "factory": pygame.Rect(500, y, btn_w, btn_h),
             "tower": pygame.Rect(610, y, btn_w, btn_h),
-            "train": pygame.Rect(770, y, 120, btn_h),
+            "watchguard": pygame.Rect(720, y, btn_w, btn_h),
+            "train": pygame.Rect(880, y, 120, btn_h),
         }
 
     def handle_click(self, pos, game_state):
@@ -56,6 +62,9 @@ class HUD:
         if self.buttons["tower"].collidepoint(pos):
             game_state.placement_mode = "tower"
             return True
+        if self.buttons["watchguard"].collidepoint(pos):
+            game_state.placement_mode = "watchguard"
+            return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
                 success = game_state.selected_building.start_production(game_state.resource_manager)
@@ -65,16 +74,16 @@ class HUD:
         return True
 
     def is_in_hud(self, pos):
-        return pos[1] >= MAP_HEIGHT
+        return pos[1] >= settings.MAP_HEIGHT
 
     def draw(self, surface, game_state, resource_flash_timer=0.0):
         self._ensure_fonts()
         mouse_pos = pygame.mouse.get_pos()
 
         # HUD background
-        hud_rect = pygame.Rect(0, MAP_HEIGHT, WIDTH, HUD_HEIGHT)
+        hud_rect = pygame.Rect(0, settings.MAP_HEIGHT, settings.WIDTH, HUD_HEIGHT)
         pygame.draw.rect(surface, HUD_BG, hud_rect)
-        pygame.draw.line(surface, (80, 80, 80), (0, MAP_HEIGHT), (WIDTH, MAP_HEIGHT), 2)
+        pygame.draw.line(surface, (80, 80, 80), (0, settings.MAP_HEIGHT), (settings.WIDTH, settings.MAP_HEIGHT), 2)
 
         # Resources (flash red when insufficient funds)
         res_text = f"Resources: {int(game_state.resource_manager.amount)}"
@@ -85,13 +94,13 @@ class HUD:
         else:
             res_color = (255, 215, 0)
         surface.blit(self.font.render(res_text, True, res_color),
-                     (15, MAP_HEIGHT + 10))
+                     (15, settings.MAP_HEIGHT + 10))
 
         # Wave info + countdown timer
         wm = game_state.wave_manager
         wave_text = f"Wave: {wm.waves_completed}/{TOTAL_WAVES}"
         surface.blit(self.font.render(wave_text, True, (200, 200, 255)),
-                     (15, MAP_HEIGHT + 34))
+                     (15, settings.MAP_HEIGHT + 34))
         if not wm.wave_active and wm.current_wave < TOTAL_WAVES:
             # Show countdown to next wave
             remaining = wm.wave_delay - wm.wave_timer
@@ -101,14 +110,14 @@ class HUD:
                 countdown_text = f"Next wave in: {mins}:{secs:02d}"
                 countdown_color = (255, 200, 100) if remaining > 10 else (255, 80, 80)
                 surface.blit(self.small_font.render(countdown_text, True, countdown_color),
-                             (15, MAP_HEIGHT + 56))
+                             (15, settings.MAP_HEIGHT + 56))
             else:
                 surface.blit(self.small_font.render("Wave incoming!", True, (255, 80, 80)),
-                             (15, MAP_HEIGHT + 56))
+                             (15, settings.MAP_HEIGHT + 56))
         else:
             enemies_text = f"Enemies: {len(wm.enemies)}"
             surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
-                         (15, MAP_HEIGHT + 56))
+                         (15, settings.MAP_HEIGHT + 56))
 
         # Build buttons (with hotkey labels)
         self._draw_button(surface, self.buttons["towncenter"],
@@ -123,30 +132,34 @@ class HUD:
         self._draw_button(surface, self.buttons["tower"],
                           f"Tower [D] ${TOWER_COST}", TOWER_ACCENT, mouse_pos,
                           game_state.resource_manager.can_afford(TOWER_COST))
+        self._draw_button(surface, self.buttons["watchguard"],
+                          f"Guard [G] ${WATCHGUARD_COST}", WATCHGUARD_ACCENT, mouse_pos,
+                          game_state.resource_manager.can_afford(WATCHGUARD_COST))
 
         # Placement mode indicator
         if game_state.placement_mode:
             mode_text = f"Placing: {game_state.placement_mode.title()} (click map | ESC to cancel)"
             surface.blit(self.small_font.render(mode_text, True, (0, 255, 0)),
-                         (15, MAP_HEIGHT + 38))
+                         (15, settings.MAP_HEIGHT + 38))
 
-        # Selected building info
+        # Selected building info — positioned left of minimap
+        minimap_left = settings.WIDTH - 200 - 8
         sb = game_state.selected_building
         if sb:
-            info_x = 740
+            info_x = minimap_left - 320
             surface.blit(self.font.render(f"Selected: {sb.label}", True, HUD_TEXT),
-                         (info_x, MAP_HEIGHT + 10))
+                         (info_x, settings.MAP_HEIGHT + 10))
             # Check if this is a DefenseTower (has combat attributes, no production)
             from buildings import DefenseTower
             if isinstance(sb, DefenseTower):
                 # Show combat stats instead of train button
                 surface.blit(self.small_font.render(
                     f"Damage: {sb.damage}  Rate: {sb.fire_rate}/s  Range: {sb.attack_range}",
-                    True, HUD_TEXT), (info_x, MAP_HEIGHT + 30))
+                    True, HUD_TEXT), (info_x, settings.MAP_HEIGHT + 30))
                 status = "Attacking" if sb.attacking else "Idle"
                 status_color = (255, 150, 150) if sb.attacking else (150, 200, 150)
                 surface.blit(self.small_font.render(f"Status: {status}", True, status_color),
-                             (info_x, MAP_HEIGHT + 48))
+                             (info_x, settings.MAP_HEIGHT + 48))
             else:
                 # Train button
                 unit_class, cost, _ = sb.can_train()
@@ -166,24 +179,24 @@ class HUD:
                     prog = sb.production_progress
                     queue_text = f"Queue: {queue_len} | Progress: {int(prog * 100)}%"
                     surface.blit(self.small_font.render(queue_text, True, HUD_TEXT),
-                                 (info_x, MAP_HEIGHT + 58))
+                                 (info_x, settings.MAP_HEIGHT + 58))
 
         # Selected units info
         elif game_state.selected_units:
-            info_x = 630
+            info_x = minimap_left - 320
             count = len(game_state.selected_units)
             if count == 1:
                 u = game_state.selected_units[0]
                 surface.blit(self.font.render(f"{u.name}", True, HUD_TEXT),
-                             (info_x, MAP_HEIGHT + 8))
+                             (info_x, settings.MAP_HEIGHT + 8))
                 hp_color = (0, 200, 0) if u.hp > u.max_hp * 0.5 else (255, 200, 0) if u.hp > u.max_hp * 0.25 else (255, 60, 60)
                 surface.blit(self.small_font.render(f"HP: {u.hp}/{u.max_hp}", True, hp_color),
-                             (info_x, MAP_HEIGHT + 30))
+                             (info_x, settings.MAP_HEIGHT + 30))
                 surface.blit(self.small_font.render(f"Speed: {u.speed}", True, HUD_TEXT),
-                             (info_x + 120, MAP_HEIGHT + 30))
+                             (info_x + 120, settings.MAP_HEIGHT + 30))
                 if u.attack_range > 0:
                     surface.blit(self.small_font.render(f"Damage: {u.damage}  Rate: {u.fire_rate}/s  Range: {u.attack_range}", True, HUD_TEXT),
-                                 (info_x, MAP_HEIGHT + 48))
+                                 (info_x, settings.MAP_HEIGHT + 48))
                     state_text = "Stuck" if u.stuck else "Attacking" if u.attacking else "Moving" if u.waypoints else "Idle"
                 else:
                     # Worker-specific info
@@ -192,14 +205,14 @@ class HUD:
                         state_label = u.state.replace("_", " ").title()
                         carry_text = f"Carrying: {u.carry_amount}" if u.carry_amount > 0 else ""
                         surface.blit(self.small_font.render(f"State: {state_label}  {carry_text}", True, HUD_TEXT),
-                                     (info_x, MAP_HEIGHT + 48))
+                                     (info_x, settings.MAP_HEIGHT + 48))
                     state_text = "Stuck" if u.stuck else "Moving" if u.waypoints else "Idle"
                 stuck_color = (255, 100, 100) if u.stuck else (150, 200, 150)
                 surface.blit(self.small_font.render(f"Status: {state_text}", True, stuck_color),
-                             (info_x, MAP_HEIGHT + 66))
+                             (info_x, settings.MAP_HEIGHT + 66))
             else:
                 surface.blit(self.font.render(f"Selected: {count} units", True, HUD_TEXT),
-                             (info_x, MAP_HEIGHT + 8))
+                             (info_x, settings.MAP_HEIGHT + 8))
                 # Summarize group
                 from units import Soldier, Tank, Worker
                 soldiers = sum(1 for u in game_state.selected_units if isinstance(u, Soldier))
@@ -210,16 +223,16 @@ class HUD:
                 if tanks: parts.append(f"{tanks} Tank{'s' if tanks > 1 else ''}")
                 if workers: parts.append(f"{workers} Worker{'s' if workers > 1 else ''}")
                 surface.blit(self.small_font.render("  ".join(parts), True, HUD_TEXT),
-                             (info_x, MAP_HEIGHT + 30))
+                             (info_x, settings.MAP_HEIGHT + 30))
                 avg_hp = sum(u.hp for u in game_state.selected_units) / count
                 avg_max = sum(u.max_hp for u in game_state.selected_units) / count
                 surface.blit(self.small_font.render(f"Avg HP: {int(avg_hp)}/{int(avg_max)}", True, HUD_TEXT),
-                             (info_x, MAP_HEIGHT + 48))
+                             (info_x, settings.MAP_HEIGHT + 48))
 
         # Controls help
-        help_text = "T: Town Center | B: Barracks | F: Factory | D: Tower | P: Debug Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
+        help_text = "T: TC | B: Barracks | F: Factory | D: Tower | G: Guard | P: Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
         surface.blit(self.small_font.render(help_text, True, (120, 120, 120)),
-                     (15, MAP_HEIGHT + HUD_HEIGHT - 22))
+                     (15, settings.MAP_HEIGHT + HUD_HEIGHT - 22))
 
     def _draw_button(self, surface, rect, text, accent_color, mouse_pos, enabled):
         self._ensure_fonts()

@@ -42,11 +42,16 @@ class Unit:
         self.fire_cooldown = 0.0
         self.target_enemy = None
         self.attacking = False
+        self.hunting_target = None  # enemy visible but out of firing range
         # Stuck detection
         self.stuck = False
         self.stuck_timer = 0.0
         self._last_x = float(x)
         self._last_y = float(y)
+
+    @property
+    def vision_range(self):
+        return self.attack_range * 1.2
 
     @property
     def alive(self):
@@ -55,6 +60,7 @@ class Unit:
     def set_target(self, pos):
         self.target_enemy = None
         self.attacking = False
+        self.hunting_target = None
         self.stuck = False
         self.stuck_timer = 0.0
         self.waypoints = [pos]
@@ -62,6 +68,7 @@ class Unit:
     def add_waypoint(self, pos):
         self.target_enemy = None
         self.attacking = False
+        self.hunting_target = None
         self.stuck = False
         self.stuck_timer = 0.0
         self.waypoints.append(pos)
@@ -89,6 +96,30 @@ class Unit:
                 bx, by = b.x + b.w // 2, b.y + b.h // 2
                 dist = self.distance_to(bx, by)
                 if dist <= self.attack_range and dist < best_dist:
+                    best_dist = dist
+                    best = b
+        return best
+
+    def find_visible_target(self, enemies, buildings=None):
+        """Find the closest enemy unit or building within vision range but outside attack range."""
+        if self.vision_range <= 0:
+            return None
+        best = None
+        best_dist = float("inf")
+        for enemy in enemies:
+            if not enemy.alive:
+                continue
+            dist = self.distance_to(enemy.x, enemy.y)
+            if dist <= self.vision_range and dist > self.attack_range and dist < best_dist:
+                best_dist = dist
+                best = enemy
+        if buildings:
+            for b in buildings:
+                if b.hp <= 0:
+                    continue
+                bx, by = b.x + b.w // 2, b.y + b.h // 2
+                dist = self.distance_to(bx, by)
+                if dist <= self.vision_range and dist > self.attack_range and dist < best_dist:
                     best_dist = dist
                     best = b
         return best
@@ -198,16 +229,43 @@ class Worker(Unit):
 
     def __init__(self, x, y):
         super().__init__(x, y, WORKER_HP, WORKER_SPEED, WORKER_SIZE)
-        self.state = "idle"  # "idle" | "moving_to_mine" | "waiting" | "mining" | "returning"
+        self.state = "idle"  # "idle" | "moving_to_mine" | "waiting" | "mining" | "returning" | "deploying" | "repairing"
         self.assigned_node = None
         self.drop_off_building = None
+        self.buildings_list = None
         self.carry_amount = 0
         self.mine_timer = 0.0
         self.resource_manager = None
+        # Deploying state
+        self.deploy_building_class = None
+        self.deploy_target = None
+        self.deploy_cost = 0
+        self.deploy_build_timer = 0.0
+        self.deploy_building = False  # True when worker has arrived and is constructing
+        # Repair state
+        self.repair_target = None
+        self.repair_rate = 5  # HP per second
 
-    def assign_to_mine(self, node, drop_off_building, resource_manager):
+    def _find_closest_town_center(self):
+        """Find the closest alive TownCenter from the buildings list."""
+        if not self.buildings_list:
+            return None
+        from buildings import TownCenter
+        best = None
+        best_dist = float("inf")
+        for b in self.buildings_list:
+            if isinstance(b, TownCenter) and b.hp > 0:
+                cx, cy = b.x + b.w // 2, b.y + b.h // 2
+                d = math.hypot(self.x - cx, self.y - cy)
+                if d < best_dist:
+                    best_dist = d
+                    best = b
+        return best
+
+    def assign_to_mine(self, node, buildings_list, resource_manager):
         self.assigned_node = node
-        self.drop_off_building = drop_off_building
+        self.buildings_list = buildings_list
+        self.drop_off_building = None
         self.resource_manager = resource_manager
         self.state = "moving_to_mine"
         self.carry_amount = 0
@@ -221,16 +279,68 @@ class Worker(Unit):
         self.state = "idle"
         self.assigned_node = None
         self.drop_off_building = None
+        self.buildings_list = None
         self.carry_amount = 0
         self.mine_timer = 0.0
 
+    def assign_to_deploy(self, building_class, target_pos, cost):
+        """Send worker to deploy a building at target position."""
+        self.cancel_mining()
+        self.state = "deploying"
+        self.deploy_building_class = building_class
+        self.deploy_target = target_pos
+        self.deploy_cost = cost
+        self.deploy_build_timer = 0.0
+        self.deploy_building = False
+        self.waypoints = [target_pos]
+
+    def cancel_deploy(self):
+        """Cancel deployment. Returns the cost to refund, or 0."""
+        if self.state != "deploying":
+            return 0
+        cost = self.deploy_cost
+        self.state = "idle"
+        self.deploy_building_class = None
+        self.deploy_target = None
+        self.deploy_cost = 0
+        self.deploy_build_timer = 0.0
+        self.deploy_building = False
+        return cost
+
+    def assign_to_repair(self, target):
+        """Send worker to repair a damaged unit or building."""
+        self.cancel_mining()
+        self.cancel_deploy()
+        self.cancel_repair()
+        self.repair_target = target
+        self.state = "repairing"
+        if hasattr(target, 'size'):
+            # Unit target
+            self.waypoints = [(target.x, target.y)]
+        else:
+            # Building target
+            cx, cy = target.x + target.w // 2, target.y + target.h // 2
+            self.waypoints = [(cx, cy)]
+
+    def cancel_repair(self):
+        if self.state != "repairing":
+            return
+        self.state = "idle"
+        self.repair_target = None
+
     def set_target(self, pos):
         self.cancel_mining()
+        self.cancel_deploy()
+        self.cancel_repair()
         self.waypoints = [pos]
 
     def add_waypoint(self, pos):
-        if self.state != "idle":
+        if self.state not in ("idle", "deploying", "repairing"):
             self.cancel_mining()
+        if self.state == "deploying":
+            self.cancel_deploy()
+        if self.state == "repairing":
+            self.cancel_repair()
         self.waypoints.append(pos)
 
     def update(self, dt):
@@ -242,11 +352,18 @@ class Worker(Unit):
             super().update(dt)
         self.update_state(dt)
 
+    def _ensure_drop_off_building(self):
+        """Ensure drop_off_building is alive, or find the closest TC."""
+        if self.drop_off_building and self.drop_off_building.hp > 0:
+            return True
+        self.drop_off_building = self._find_closest_town_center()
+        return self.drop_off_building is not None
+
     def update_state(self, dt):
         """Run mining state transitions (called by game_state when movement is handled externally)."""
         if self.state == "moving_to_mine":
-            # Check if drop-off building was destroyed
-            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+            # Check if any town center exists to deliver to
+            if not self._ensure_drop_off_building():
                 self.cancel_mining()
                 return
             # Check if close enough to the node (arrival or blocked nearby)
@@ -267,7 +384,7 @@ class Worker(Unit):
                     self.state = "waiting"
 
         elif self.state == "waiting":
-            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+            if not self._ensure_drop_off_building():
                 self.cancel_mining()
                 return
             if not self.assigned_node or self.assigned_node.depleted:
@@ -284,8 +401,8 @@ class Worker(Unit):
                 self.mine_timer = 0.0
 
         elif self.state == "mining":
-            # Check if drop-off building was destroyed
-            if not self.drop_off_building or self.drop_off_building.hp <= 0:
+            # Check if any town center exists to deliver to
+            if not self._ensure_drop_off_building():
                 if self.assigned_node and self.assigned_node.mining_worker is self:
                     self.assigned_node.mining_worker = None
                 self.cancel_mining()
@@ -296,6 +413,11 @@ class Worker(Unit):
                 # Release the node
                 self.assigned_node.mining_worker = None
                 if self.carry_amount <= 0:
+                    self.cancel_mining()
+                    return
+                # Find the closest town center for delivery
+                self.drop_off_building = self._find_closest_town_center()
+                if not self.drop_off_building:
                     self.cancel_mining()
                     return
                 self.state = "returning"
@@ -311,11 +433,21 @@ class Worker(Unit):
                 self.waypoints = [(edge_x, edge_y)]
 
         elif self.state == "returning":
-            # Check if drop-off building was destroyed
+            # Check if drop-off building was destroyed — try to find another TC
             bld = self.drop_off_building
             if not bld or bld.hp <= 0:
-                self.cancel_mining()
-                return
+                self.drop_off_building = self._find_closest_town_center()
+                bld = self.drop_off_building
+                if not bld:
+                    self.cancel_mining()
+                    return
+                # Redirect to the new TC
+                cx, cy = bld.x + bld.w // 2, bld.y + bld.h // 2
+                edge_x = max(bld.x, min(self.x, bld.x + bld.w))
+                edge_y = max(bld.y, min(self.y, bld.y + bld.h))
+                if edge_x == self.x and edge_y == self.y:
+                    edge_x, edge_y = cx, bld.y + bld.h
+                self.waypoints = [(edge_x, edge_y)]
             bld_rect = bld.rect.inflate(self.size * 2, self.size * 2)
             near_building = bld_rect.collidepoint(int(self.x), int(self.y))
             if near_building or not self.waypoints:
@@ -328,6 +460,38 @@ class Worker(Unit):
                     self.waypoints = [(self.assigned_node.x, self.assigned_node.y)]
                 else:
                     self.cancel_mining()
+
+        elif self.state == "repairing":
+            target = self.repair_target
+            # Check target still valid
+            if target is None:
+                self.cancel_repair()
+                return
+            target_alive = target.alive if hasattr(target, 'alive') else target.hp > 0
+            if not target_alive:
+                self.cancel_repair()
+                return
+            target_max = target.max_hp if hasattr(target, 'max_hp') else getattr(target, 'max_hp', target.hp)
+            if target.hp >= target_max:
+                self.cancel_repair()
+                return
+            # Get target position
+            if hasattr(target, 'size'):
+                tx, ty = target.x, target.y
+            else:
+                tx, ty = target.x + target.w // 2, target.y + target.h // 2
+            dist = math.hypot(self.x - tx, self.y - ty)
+            repair_range = self.size + (target.size if hasattr(target, 'size') else max(target.w, target.h) // 2) + 10
+            if dist <= repair_range:
+                # In range — repair
+                self.waypoints.clear()
+                heal = self.repair_rate * dt
+                target.hp = min(target_max, target.hp + heal)
+                if target.hp >= target_max:
+                    self.cancel_repair()
+            else:
+                # Move toward target (update waypoint to track moving units)
+                self.waypoints = [(tx, ty)]
 
     def draw(self, surface):
         super().draw(surface)

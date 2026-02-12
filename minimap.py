@@ -1,17 +1,15 @@
 import pygame
-from settings import WIDTH, MAP_HEIGHT, HUD_HEIGHT, HEIGHT, WORLD_W, WORLD_H
+import settings
 
 
-# Minimap dimensions and position
+# Minimap dimensions (world-proportional, don't change on resize)
 MINIMAP_W = 200
-MINIMAP_H = int(MINIMAP_W * WORLD_H / WORLD_W)  # keep proportional to world
+MINIMAP_H = int(MINIMAP_W * settings.WORLD_H / settings.WORLD_W)
 MINIMAP_MARGIN = 8
-MINIMAP_X = WIDTH - MINIMAP_W - MINIMAP_MARGIN
-MINIMAP_Y = MAP_HEIGHT + (HUD_HEIGHT - MINIMAP_H) // 2
 
 # Scale factors (world coords -> minimap coords)
-SCALE_X = MINIMAP_W / WORLD_W
-SCALE_Y = MINIMAP_H / WORLD_H
+SCALE_X = MINIMAP_W / settings.WORLD_W
+SCALE_Y = MINIMAP_H / settings.WORLD_H
 
 # Colors
 BG_COLOR = (15, 40, 15, 180)
@@ -30,7 +28,17 @@ VIEWPORT_COLOR = (255, 255, 255)
 class Minimap:
     def __init__(self):
         self.surface = pygame.Surface((MINIMAP_W, MINIMAP_H), pygame.SRCALPHA)
-        self.rect = pygame.Rect(MINIMAP_X, MINIMAP_Y, MINIMAP_W, MINIMAP_H)
+        self._update_position()
+
+    def _update_position(self):
+        """Recalculate position based on current screen dimensions."""
+        self.minimap_x = settings.WIDTH - MINIMAP_W - MINIMAP_MARGIN
+        self.minimap_y = settings.MAP_HEIGHT + (settings.HUD_HEIGHT - MINIMAP_H) // 2
+        self.rect = pygame.Rect(self.minimap_x, self.minimap_y, MINIMAP_W, MINIMAP_H)
+
+    def resize(self):
+        """Call after screen resize to update minimap position."""
+        self._update_position()
 
     def _world_to_mini(self, wx, wy):
         """Convert world coordinates to minimap-local coordinates."""
@@ -42,11 +50,22 @@ class Minimap:
         if not self.rect.collidepoint(screen_pos):
             return None
         # Local position within the minimap
-        lx = screen_pos[0] - MINIMAP_X
-        ly = screen_pos[1] - MINIMAP_Y
+        lx = screen_pos[0] - self.minimap_x
+        ly = screen_pos[1] - self.minimap_y
         # Convert to world coords and center the viewport
-        world_x = lx / SCALE_X - WIDTH / 2
-        world_y = ly / SCALE_Y - MAP_HEIGHT / 2
+        world_x = lx / SCALE_X - settings.WIDTH / 2
+        world_y = ly / SCALE_Y - settings.MAP_HEIGHT / 2
+        return (world_x, world_y)
+
+    def minimap_to_world(self, screen_pos):
+        """Convert a screen position on the minimap to world coordinates.
+        Returns (world_x, world_y) or None if pos is outside the minimap."""
+        if not self.rect.collidepoint(screen_pos):
+            return None
+        lx = screen_pos[0] - self.minimap_x
+        ly = screen_pos[1] - self.minimap_y
+        world_x = lx / SCALE_X
+        world_y = ly / SCALE_Y
         return (world_x, world_y)
 
     def draw(self, screen, game_state, camera_x=0, camera_y=0):
@@ -97,12 +116,12 @@ class Minimap:
         # Draw viewport rectangle (shows current camera view)
         vx = int(camera_x * SCALE_X)
         vy = int(camera_y * SCALE_Y)
-        vw = max(int(WIDTH * SCALE_X), 1)
-        vh = max(int(MAP_HEIGHT * SCALE_Y), 1)
+        vw = max(int(settings.WIDTH * SCALE_X), 1)
+        vh = max(int(settings.MAP_HEIGHT * SCALE_Y), 1)
         pygame.draw.rect(surf, VIEWPORT_COLOR, (vx, vy, vw, vh), 1)
 
         # Blit minimap surface onto screen
-        screen.blit(surf, (MINIMAP_X, MINIMAP_Y))
+        screen.blit(surf, (self.minimap_x, self.minimap_y))
 
         # Border
         pygame.draw.rect(screen, BORDER_COLOR, self.rect, 1)

@@ -1,7 +1,7 @@
 general map specifications:
--the windows size must be 2000x1200 pixels
+-the default window size is 2000x1200 pixels. the window is resizable.
 -the world map is 10000x5400 pixels, scrollable via camera.
--the camera scrolls when the mouse reaches the screen edge (30px margin) or using arrow keys.
+-the camera scrolls when the mouse reaches the screen edge (30px margin), enters the bottom HUD area, or using arrow keys.
 -the game is over when all AI buildings and combat units are destroyed (victory), or if all player units and buildings are destroyed (defeat).
 -Yanuses wave enemies exist but are currently disabled.
 -the game runs at 2x simulation speed.
@@ -14,10 +14,13 @@ minimap:
 -a white rectangle on the minimap indicates the current camera viewport.
 -clicking on the minimap moves the viewport to that location.
 -click-dragging on the minimap smoothly pans the camera.
+-right-clicking on the minimap sets a movement waypoint for selected units.
+-shift+right-clicking on the minimap adds a waypoint to the path.
 
 units specifications:
 
 All units fires at enemy as soon as they are in range. after the fight is over, units resume moving to their waypoint.
+Combat units have a vision range 20% bigger than their firing range. when an enemy is seen within vision range but outside firing range, the unit hunts it (moves toward it until in firing range).
 When a combat unit is selected, a circle showing its attack range is displayed around it.
 Units cannot use the same space at the same time.
 Units cannot spawn in a space used by an existing unit.
@@ -32,9 +35,11 @@ the worker:
 -cost 15 ressources to be built.
 -trained from the town center in 4 seconds.
 -carries 10 ressources per trip and mines for 2 seconds at a node.
--delivers ressources at the edge of the building, not inside it.
+-delivers ressources to the closest town center.
 -only one worker can mine a node at a time, others wait for it to finish.
--if the drop-off town center is destroyed, the worker cancels mining.
+-if no town center exists, the worker cancels mining.
+-workers are required to deploy buildings: select a worker, enter placement mode, and click to place. the worker moves to the location and constructs the building over time (a progress bar is shown during construction).
+-workers can repair damaged buildings and units at 5 HP per second. right-click a damaged friendly entity with selected workers to send them to repair.
 
 the soldier:
 -has 100 health points
@@ -53,12 +58,20 @@ the tank:
 
 buildings specifications:
 
+-buildings can only be placed within 500 pixels of a town center or watchguard, or 100 pixels of another building. valid placement zones are shown as light circles when in placement mode.
 -buildings can be attacked and destroyed by enemies.
--all production buildings (town center, barracks, factory) have 200 health points.
--the town center costs 100 ressources to place.
--the barracks costs 50 ressources to place.
--the factory costs 80 ressources to place.
--the defense tower costs 300 ressources to place.
+-building construction takes time: the worker must stay at the site while building completes.
+-the town center has 1000 HP, costs 100 ressources, takes 15 seconds to build.
+-the barracks has 400 HP, costs 50 ressources, takes 5 seconds to build.
+-the factory has 400 HP, costs 80 ressources, takes 10 seconds to build.
+-the defense tower has 1000 HP, costs 300 ressources, takes 5 seconds to build.
+
+the watchguard:
+-has 400 health points, costs 200 ressources, takes 3 seconds to build.
+-expands the building placement zone by 500 pixels around it.
+-consumes the worker that builds it.
+-does not produce units.
+-keyboard shortcut: G.
 
 the defense tower:
 -has 1000 health points.
@@ -116,6 +129,9 @@ controls:
 -B: enter barracks placement mode.
 -F: enter factory placement mode.
 -D: enter defense tower placement mode.
+-G: enter watchguard placement mode.
+-Right click on damaged friendly unit/building: send selected workers to repair.
+-Right click: cancel building placement mode.
 -P: pause the game and generate a dbug.log file with the full game state. press ESC to resume.
 -Left click: place building, select unit or building, click minimap to move viewport.
 -Left drag: box-select units, drag on minimap to pan camera.
@@ -128,5 +144,5 @@ controls:
 command line options:
 -python game.py                          # normal game (basic AI)
 -python game.py --ai <name>              # select AI profile (basic, defensive, etc.)
--python game.py --playforme              # spectator mode: AI controls the player side at 20x speed
+-python game.py --playforme              # spectator mode: AI controls the player side
 -python game.py --replay replay/file.json  # replay viewer (Space=pause, +/-=speed, click timeline to seek)

@@ -3,12 +3,15 @@ import os
 import pygame
 from settings import (
     BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE,
+    BARRACKS_HP, FACTORY_HP, TOWN_CENTER_HP,
+    BARRACKS_BUILD_TIME, FACTORY_BUILD_TIME, TOWN_CENTER_BUILD_TIME,
     SOLDIER_COST, SOLDIER_TRAIN_TIME,
     TANK_COST, TANK_TRAIN_TIME,
     WORKER_COST, WORKER_TRAIN_TIME,
     SELECT_COLOR, HEALTH_BAR_BG, HEALTH_BAR_FG,
     BARRACKS_SPRITE, FACTORY_SPRITE, TOWN_CENTER_SPRITE,
-    TOWER_SIZE, TOWER_HP, TOWER_FIRE_RATE, TOWER_DAMAGE, TOWER_RANGE, TOWER_SPRITE,
+    TOWER_SIZE, TOWER_HP, TOWER_FIRE_RATE, TOWER_DAMAGE, TOWER_RANGE, TOWER_SPRITE, TOWER_BUILD_TIME,
+    WATCHGUARD_SIZE, WATCHGUARD_HP, WATCHGUARD_ZONE_RADIUS, WATCHGUARD_BUILD_TIME,
 )
 from units import Soldier, Tank, Worker
 
@@ -107,13 +110,14 @@ class Building:
 class TownCenter(Building):
     label = "Town Center"
     sprite = None
+    build_time = TOWN_CENTER_BUILD_TIME
 
     @classmethod
     def load_assets(cls):
         cls.sprite = _load_sprite(TOWN_CENTER_SPRITE, TOWN_CENTER_SIZE)
 
     def __init__(self, x, y):
-        super().__init__(x, y, TOWN_CENTER_SIZE)
+        super().__init__(x, y, TOWN_CENTER_SIZE, hp=TOWN_CENTER_HP)
 
     def can_train(self):
         return (Worker, WORKER_COST, WORKER_TRAIN_TIME)
@@ -122,13 +126,14 @@ class TownCenter(Building):
 class Barracks(Building):
     label = "Barracks"
     sprite = None
+    build_time = BARRACKS_BUILD_TIME
 
     @classmethod
     def load_assets(cls):
         cls.sprite = _load_sprite(BARRACKS_SPRITE, BARRACKS_SIZE)
 
     def __init__(self, x, y):
-        super().__init__(x, y, BARRACKS_SIZE)
+        super().__init__(x, y, BARRACKS_SIZE, hp=BARRACKS_HP)
 
     def can_train(self):
         return (Soldier, SOLDIER_COST, SOLDIER_TRAIN_TIME)
@@ -137,13 +142,14 @@ class Barracks(Building):
 class Factory(Building):
     label = "Factory"
     sprite = None
+    build_time = FACTORY_BUILD_TIME
 
     @classmethod
     def load_assets(cls):
         cls.sprite = _load_sprite(FACTORY_SPRITE, FACTORY_SIZE)
 
     def __init__(self, x, y):
-        super().__init__(x, y, FACTORY_SIZE)
+        super().__init__(x, y, FACTORY_SIZE, hp=FACTORY_HP)
 
     def can_train(self):
         return (Tank, TANK_COST, TANK_TRAIN_TIME)
@@ -152,6 +158,7 @@ class Factory(Building):
 class DefenseTower(Building):
     label = "Tower"
     sprite = None
+    build_time = TOWER_BUILD_TIME
 
     @classmethod
     def load_assets(cls):
@@ -287,3 +294,53 @@ class DefenseTower(Building):
             tx = target.x if hasattr(target, 'x') else target.x + target.w // 2
             ty = target.y if hasattr(target, 'size') else target.y + target.h // 2
             pygame.draw.line(surface, (255, 200, 50), (cx, cy), (int(tx), int(ty)), 2)
+
+
+class Watchguard(Building):
+    """Expands the building zone by 500px. Consumes the worker that builds it."""
+    label = "Watchguard"
+    sprite = None
+    build_time = WATCHGUARD_BUILD_TIME
+    zone_radius = WATCHGUARD_ZONE_RADIUS
+
+    def __init__(self, x, y):
+        super().__init__(x, y, WATCHGUARD_SIZE, hp=WATCHGUARD_HP)
+
+    def can_train(self):
+        return (Worker, 0, 0)
+
+    def start_production(self, resource_mgr):
+        return False
+
+    def update(self, dt):
+        pass
+
+    def draw(self, surface):
+        cx, cy = self.center
+        # Brown/tan watchtower look
+        pygame.draw.rect(surface, (140, 110, 60), (self.x, self.y, self.w, self.h))
+        pygame.draw.rect(surface, (100, 80, 40), (self.x, self.y, self.w, self.h), 2)
+        # Small tower top
+        pygame.draw.rect(surface, (160, 130, 70), (self.x + 8, self.y + 4, self.w - 16, self.h // 3))
+        # Flag
+        pygame.draw.line(surface, (80, 60, 30), (cx, self.y + 4), (cx, self.y - 8), 2)
+        pygame.draw.polygon(surface, (200, 50, 50), [(cx, self.y - 8), (cx + 10, self.y - 4), (cx, self.y)])
+
+        if self.selected:
+            pygame.draw.rect(surface, SELECT_COLOR, self.rect.inflate(6, 6), 2)
+            pygame.draw.circle(surface, (100, 140, 100, 80), (cx, cy), self.zone_radius, 1)
+
+        # Health bar
+        bar_w = self.w
+        bar_h = 4
+        bx_bar, by_bar = self.x, self.y - 8
+        pygame.draw.rect(surface, HEALTH_BAR_BG, (bx_bar, by_bar, bar_w, bar_h))
+        fill_w = int(bar_w * (self.hp / self.max_hp))
+        hp_ratio = self.hp / self.max_hp
+        bar_color = (0, 200, 0) if hp_ratio > 0.5 else (255, 200, 0) if hp_ratio > 0.25 else (255, 50, 50)
+        pygame.draw.rect(surface, bar_color, (bx_bar, by_bar, fill_w, bar_h))
+
+        font = pygame.font.SysFont(None, 18)
+        label = font.render(self.label, True, (255, 255, 255))
+        label_rect = label.get_rect(center=(cx, self.y - 16))
+        surface.blit(label, label_rect)

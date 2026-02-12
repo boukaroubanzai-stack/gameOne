@@ -112,14 +112,20 @@ YANUSES_PER_WAVE = 3  # enemies per wave
 # Town Center
 TOWN_CENTER_COST = 100
 TOWN_CENTER_SIZE = (64, 64)
+TOWN_CENTER_HP = 1000
+TOWN_CENTER_BUILD_TIME = 15.0
 
 # Barracks
 BARRACKS_COST = 50
 BARRACKS_SIZE = (64, 64)
+BARRACKS_HP = 400
+BARRACKS_BUILD_TIME = 5.0
 
 # Factory
 FACTORY_COST = 80
 FACTORY_SIZE = (64, 64)
+FACTORY_HP = 400
+FACTORY_BUILD_TIME = 10.0
 
 # Defense Tower
 TOWER_COST = 300
@@ -129,3 +135,15 @@ TOWER_FIRE_RATE = 1.5  # shots per second (between soldier and tank)
 TOWER_DAMAGE = 25
 TOWER_RANGE = 200  # pixels, large range
 TOWER_SPRITE = os.path.join(ASSETS_DIR, "tower.png")  # will use fallback if missing
+TOWER_BUILD_TIME = 5.0
+
+# Watchguard
+WATCHGUARD_COST = 200
+WATCHGUARD_SIZE = (48, 48)
+WATCHGUARD_HP = 400
+WATCHGUARD_BUILD_TIME = 3.0
+WATCHGUARD_ZONE_RADIUS = 500  # expands building area by 500px
+
+# Building placement zones
+BUILDING_ZONE_TC_RADIUS = 500      # can place within 500px of a Town Center
+BUILDING_ZONE_BUILDING_RADIUS = 100  # can place within 100px of any other building

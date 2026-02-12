@@ -237,13 +237,13 @@ class AIPlayer:
                 if unit.state == "idle":
                     node = self._find_best_mineral_node_for_worker(unit)
                     if node:
-                        unit.assign_to_mine(node, tc, self.resource_manager)
+                        unit.assign_to_mine(node, self.buildings, self.resource_manager)
                 elif unit.state == "waiting":
                     # Worker stuck waiting — reassign to a different node
                     node = self._find_best_mineral_node_for_worker(unit)
                     if node and node is not unit.assigned_node:
                         unit.cancel_mining()
-                        unit.assign_to_mine(node, tc, self.resource_manager)
+                        unit.assign_to_mine(node, self.buildings, self.resource_manager)
 
     # --- Building placement ---
 
@@ -289,21 +289,38 @@ class AIPlayer:
                 return (x, y)
         return None
 
+    def _find_available_worker(self):
+        """Find a worker available for building. Prefers idle, then mining workers."""
+        idle = [u for u in self.units if isinstance(u, Worker) and u.alive and u.state == "idle"]
+        if idle:
+            return idle
+        # Pull a mining worker if no idle ones
+        mining = [u for u in self.units if isinstance(u, Worker) and u.alive
+                  and u.state in ("moving_to_mine", "waiting", "mining", "returning")
+                  and u.deploy_building_class is None]
+        return mining
+
     def _try_place_building(self, building_class, cost, size):
-        """Attempt to place and pay for a building."""
+        """Attempt to place a building by sending a worker to deploy it."""
         if not self.resource_manager.can_afford(cost):
+            return False
+        available_workers = self._find_available_worker()
+        if not available_workers:
             return False
         pos = self._find_building_placement(size)
         if pos is None:
             return False
         self.resource_manager.spend(cost)
-        b = building_class(pos[0], pos[1])
-        b.team = "ai"
-        self.buildings.append(b)
+        closest = min(available_workers, key=lambda w: math.hypot(w.x - pos[0], w.y - pos[1]))
+        closest.cancel_mining()
+        closest.assign_to_deploy(building_class, pos, cost)
         return True
 
     def _place_tower_near_building(self):
-        """Place a defense tower adjacent to a random existing building."""
+        """Place a defense tower adjacent to a random existing building via worker deployment."""
+        available_workers = self._find_available_worker()
+        if not available_workers:
+            return False
         # Pick buildings that don't already have a tower nearby
         non_tower_buildings = [b for b in self.buildings if b.hp > 0 and not isinstance(b, DefenseTower)]
         if not non_tower_buildings:
@@ -341,9 +358,9 @@ class AIPlayer:
                             break
                 if not overlap:
                     if self.resource_manager.spend(TOWER_COST):
-                        tower = DefenseTower(x, y)
-                        tower.team = "ai"
-                        self.buildings.append(tower)
+                        closest = min(available_workers, key=lambda w: math.hypot(w.x - x, w.y - y))
+                        closest.cancel_mining()
+                        closest.assign_to_deploy(DefenseTower, (x, y), TOWER_COST)
                         return True
             return False
 
@@ -782,9 +799,58 @@ class AIPlayer:
 
     # --- Main update ---
 
+    def _handle_deploying_workers(self, dt):
+        """Check for AI workers that have arrived at their deploy target."""
+        for unit in self.units:
+            if not isinstance(unit, Worker) or unit.state != "deploying" or unit.waypoints:
+                continue
+            # Worker has arrived — start or continue building
+            if not unit.deploy_building:
+                unit.deploy_building = True
+                unit.deploy_build_timer = 0.0
+
+            unit.deploy_build_timer += dt
+            build_time = unit.deploy_building_class.build_time
+            if unit.deploy_build_timer < build_time:
+                continue  # Still constructing
+
+            # Construction complete
+            bx, by = unit.deploy_target
+            b = unit.deploy_building_class(bx, by)
+            b.team = "ai"
+
+            valid = True
+            if b.rect.bottom > WORLD_H or b.rect.top < 0 or b.rect.left < 0 or b.rect.right > WORLD_W:
+                valid = False
+            if valid:
+                for existing in self.buildings:
+                    if b.rect.colliderect(existing.rect):
+                        valid = False
+                        break
+            if valid:
+                for node in self.mineral_nodes:
+                    if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
+                        valid = False
+                        break
+
+            if valid:
+                self.buildings.append(b)
+            else:
+                self.resource_manager.deposit(unit.deploy_cost)
+
+            unit.state = "idle"
+            unit.deploy_building_class = None
+            unit.deploy_target = None
+            unit.deploy_cost = 0
+            unit.deploy_build_timer = 0.0
+            unit.deploy_building = False
+
     def update(self, dt, player_units, player_buildings, all_units_for_collision):
         """Update AI: think, produce, move units."""
         self._ensure_tinted_sprites()
+
+        # Handle deploying workers (create buildings when they arrive)
+        self._handle_deploying_workers(dt)
 
         # Periodic decision making
         self.think_timer += dt
@@ -845,11 +911,42 @@ class AIPlayer:
             if isinstance(unit, (Soldier, Tank)):
                 target = unit.find_target(player_units, player_buildings)
                 if target:
+                    unit.hunting_target = None
                     unit.target_enemy = target
                     unit.attacking = True
                     unit.fire_cooldown = 0.0
                     unit.try_attack(dt)
-                elif not unit.waypoints and self.attack_target:
+                    continue
+                # Vision hunting: chase enemies visible but out of firing range
+                if not unit.waypoints or unit.hunting_target:
+                    if unit.hunting_target:
+                        ht = unit.hunting_target
+                        alive = (hasattr(ht, 'alive') and ht.alive) or \
+                                (hasattr(ht, 'hp') and ht.hp > 0)
+                        if alive:
+                            if hasattr(ht, 'size'):
+                                hx, hy = ht.x, ht.y
+                            else:
+                                hx, hy = ht.x + ht.w // 2, ht.y + ht.h // 2
+                            dist = unit.distance_to(hx, hy)
+                            if dist <= unit.vision_range:
+                                unit.waypoints = [(hx, hy)]
+                            else:
+                                unit.hunting_target = None
+                                unit.waypoints = []
+                        else:
+                            unit.hunting_target = None
+                            unit.waypoints = []
+                    else:
+                        visible = unit.find_visible_target(player_units, player_buildings)
+                        if visible:
+                            unit.hunting_target = visible
+                            if hasattr(visible, 'size'):
+                                hx, hy = visible.x, visible.y
+                            else:
+                                hx, hy = visible.x + visible.w // 2, visible.y + visible.h // 2
+                            unit.waypoints = [(hx, hy)]
+                if not unit.waypoints and self.attack_target:
                     if id(unit) in self._attacking_units:
                         # Resume moving toward attack target after killing an enemy
                         dist = math.hypot(unit.x - self.attack_target[0], unit.y - self.attack_target[1])
@@ -867,10 +964,11 @@ class AIPlayer:
         self._attacking_units &= alive_ids
         self._garrison_units &= alive_ids
 
-        # Remove dead AI units (release mining nodes first)
+        # Remove dead AI units (release mining nodes / cancel deploy first)
         for u in self.units:
             if not u.alive and isinstance(u, Worker):
                 u.cancel_mining()
+                u.cancel_deploy()  # cost lost on death
         self.units = [u for u in self.units if u.alive]
 
         # Remove dead AI buildings
