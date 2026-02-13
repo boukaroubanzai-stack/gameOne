@@ -228,6 +228,7 @@ class Worker(Unit):
 
     def __init__(self, x, y):
         super().__init__(x, y, WORKER_HP, WORKER_SPEED, WORKER_SIZE)
+        self._vision_range = SOLDIER_RANGE * 1.2  # same vision as soldiers
         self.state = "idle"  # "idle" | "moving_to_mine" | "waiting" | "mining" | "returning" | "deploying" | "repairing"
         self.assigned_node = None
         self.drop_off_building = None
@@ -244,6 +245,10 @@ class Worker(Unit):
         # Repair state
         self.repair_target = None
         self.repair_rate = 5  # HP per second
+
+    @property
+    def vision_range(self):
+        return self._vision_range
 
     def _find_closest_town_center(self):
         """Find the closest alive TownCenter from the buildings list."""

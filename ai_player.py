@@ -121,6 +121,8 @@ class AIPlayer:
             self._tinted_sprites["barracks"] = tint_surface(Barracks.sprite, AI_TINT_COLOR)
         if Factory.sprite:
             self._tinted_sprites["factory"] = tint_surface(Factory.sprite, AI_TINT_COLOR)
+        if DefenseTower.sprite:
+            self._tinted_sprites["tower"] = tint_surface(DefenseTower.sprite, AI_TINT_COLOR)
 
     def _get_tinted_sprite(self, entity):
         """Get the tinted sprite for an AI entity."""
@@ -136,6 +138,8 @@ class AIPlayer:
             return self._tinted_sprites.get("barracks")
         elif isinstance(entity, Factory):
             return self._tinted_sprites.get("factory")
+        elif isinstance(entity, DefenseTower):
+            return self._tinted_sprites.get("tower")
         return None
 
     # --- Helper methods ---

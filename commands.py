@@ -2,9 +2,10 @@
 
 import math
 from units import Worker, Soldier, Tank
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from settings import (
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
+    RADAR_COST,
 )
 
 BUILDING_CLASSES = {
@@ -13,6 +14,7 @@ BUILDING_CLASSES = {
     "towncenter": TownCenter,
     "tower": DefenseTower,
     "watchguard": Watchguard,
+    "radar": Radar,
 }
 
 BUILDING_COSTS = {
@@ -21,6 +23,7 @@ BUILDING_COSTS = {
     "towncenter": TOWN_CENTER_COST,
     "tower": TOWER_COST,
     "watchguard": WATCHGUARD_COST,
+    "radar": RADAR_COST,
 }
 
 

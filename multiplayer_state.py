@@ -4,7 +4,7 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from units import Worker, Soldier, Tank
 from minerals import MineralNode
 from settings import (
@@ -67,6 +67,12 @@ class RemotePlayer:
             self._tinted_sprites["barracks"] = tint_surface(Barracks.sprite, AI_TINT_COLOR)
         if Factory.sprite:
             self._tinted_sprites["factory"] = tint_surface(Factory.sprite, AI_TINT_COLOR)
+        if DefenseTower.sprite:
+            self._tinted_sprites["tower"] = tint_surface(DefenseTower.sprite, AI_TINT_COLOR)
+        if Watchguard.sprite:
+            self._tinted_sprites["watchguard"] = tint_surface(Watchguard.sprite, AI_TINT_COLOR)
+        if Radar.sprite:
+            self._tinted_sprites["radar"] = tint_surface(Radar.sprite, AI_TINT_COLOR)
 
     def _get_tinted_sprite(self, entity):
         if isinstance(entity, Soldier):
@@ -81,6 +87,12 @@ class RemotePlayer:
             return self._tinted_sprites.get("barracks")
         elif isinstance(entity, Factory):
             return self._tinted_sprites.get("factory")
+        elif isinstance(entity, DefenseTower):
+            return self._tinted_sprites.get("tower")
+        elif isinstance(entity, Watchguard):
+            return self._tinted_sprites.get("watchguard")
+        elif isinstance(entity, Radar):
+            return self._tinted_sprites.get("radar")
         return None
 
     def _handle_deploying_workers(self, dt):

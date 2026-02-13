@@ -31,11 +31,13 @@ No tests, linting, or CI/CD exist. `gameplay.txt` is the game design spec.
 
 ### Multiplayer system
 
-- **network.py** — TCP connection with length-prefixed JSON message framing, UPnP port mapping via `miniupnpc`, `NetworkHost`/`NetworkClient` for connection setup, `NetSession` for lockstep tick management.
+- **network.py** — UDP connection with reliable delivery layer (sequence numbers, piggybacked ACKs, 30ms retransmit), length-prefixed JSON message framing, UPnP port mapping via `miniupnpc`, `NetworkHost`/`NetworkClient` for connection setup, `NetSession` for lockstep tick management.
 - **commands.py** — Serializable command definitions (move, queue_waypoint, mine, place_building, train_unit, repair) and `execute_command()` engine that applies commands to either team's entities.
 - **multiplayer_state.py (`RemotePlayer`)** — Replaces `AIPlayer` in multiplayer. Same data interface (`.buildings`, `.units`, `.mineral_nodes`, `.resource_manager`) but no autonomous AI. All decisions come from the remote player's commands over the network.
 
-**Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over TCP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player). Tick sync is **non-blocking**: if remote commands haven't arrived yet, the UI (rendering, input, camera) keeps running while simulation is paused. State vars `net_waiting` / `net_wait_start` in `game.py` track the wait across frames (5s timeout).
+**Lockstep model**: Both peers run the full simulation locally. Every 4 frames (~67ms at 60fps), both peers exchange command batches over UDP. Commands are executed on the same tick on both sides. Game runs at 1x speed in multiplayer (2x in single-player). **Input delay buffering**: commands are sent tagged for `current_tick + 1`, giving the network a full tick interval (~67ms) to deliver them before they're needed. Tick sync is **non-blocking**: if remote commands haven't arrived yet, the UI (rendering, input, camera) keeps running while simulation is paused. State vars `net_waiting` / `net_wait_start` in `game.py` track the wait across frames (5s timeout).
+
+**Fog of war**: In multiplayer, opponent entities are only rendered when within **vision range** of the local player's units or buildings. Buildings have 500px default vision (or `attack_range` for DefenseTower). `_is_visible_to_team()` in `game.py` performs the check. Fog of war is rendering-only — the full simulation still runs on both peers for lockstep correctness.
 
 **Entity identification**: All units and buildings have a `net_id` (sequential integer assigned by `GameState` counters). Both peers run the same counter in the same order, so IDs stay in sync. Mineral nodes use their list index. `GameState` maintains `_unit_by_net_id` / `_building_by_net_id` dicts for O(1) lookup.
 
@@ -55,7 +57,7 @@ Centralised rendering helpers used across all drawing code:
 
 Shared drawing helpers eliminate duplication: `_draw_attack_line()`, `_draw_health_bar()`, `_draw_worker_extras()`, `_draw_range_circle()`, `_get_zone_surface()`.
 
-In multiplayer, input events generate command dicts queued via `net_session.queue_command()` instead of directly mutating game state.
+In multiplayer, input events generate command dicts queued via `net_session.queue_command()` instead of directly mutating game state. An FPS counter is displayed in the top-right corner.
 
 ### World & camera
 

@@ -136,7 +136,7 @@ TOWER_HP = 1000
 TOWER_FIRE_RATE = 1.5  # shots per second (between soldier and tank)
 TOWER_DAMAGE = 25
 TOWER_RANGE = 200  # pixels, large range
-TOWER_SPRITE = os.path.join(ASSETS_DIR, "tower.png")  # will use fallback if missing
+TOWER_SPRITE = os.path.join(ASSETS_DIR, "tower.png")
 TOWER_BUILD_TIME = 5.0
 
 # Watchguard
@@ -145,6 +145,15 @@ WATCHGUARD_SIZE = (48, 48)
 WATCHGUARD_HP = 400
 WATCHGUARD_BUILD_TIME = 3.0
 WATCHGUARD_ZONE_RADIUS = 500  # expands building area by 500px
+WATCHGUARD_SPRITE = os.path.join(ASSETS_DIR, "watchguard.png")
+
+# Radar
+RADAR_COST = 400
+RADAR_SIZE = (64, 64)
+RADAR_HP = 500
+RADAR_BUILD_TIME = 8.0
+RADAR_VISION = 2000  # vision range in pixels
+RADAR_SPRITE = os.path.join(ASSETS_DIR, "radar.png")
 
 # Building placement zones
 BUILDING_ZONE_TC_RADIUS = 500      # can place within 500px of a Town Center

@@ -4,14 +4,14 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from units import Worker, Soldier, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
 from ai_player import AIPlayer
 from settings import (
     WORLD_W, WORLD_H, STARTING_WORKERS,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST, RADAR_COST,
     PLAYER_TC_POS,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
@@ -218,6 +218,8 @@ class GameState:
             building_class = DefenseTower
         elif self.placement_mode == "watchguard":
             building_class = Watchguard
+        elif self.placement_mode == "radar":
+            building_class = Radar
         else:
             return False
 
@@ -276,6 +278,8 @@ class GameState:
             return TOWER_COST
         elif self.placement_mode == "watchguard":
             return WATCHGUARD_COST
+        elif self.placement_mode == "radar":
+            return RADAR_COST
         return 0
 
     def command_move(self, pos):

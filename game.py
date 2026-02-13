@@ -7,7 +7,7 @@ import datetime
 import settings
 from settings import (
     WIDTH, HEIGHT, FPS, MAP_COLOR, MAP_HEIGHT, DRAG_BOX_COLOR,
-    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, WATCHGUARD_SIZE,
+    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, WATCHGUARD_SIZE, RADAR_SIZE,
     WORLD_W, WORLD_H, SCROLL_SPEED, SCROLL_EDGE,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
@@ -16,7 +16,7 @@ from game_state import GameState
 from hud import HUD
 from minimap import Minimap
 from units import Soldier, Tank, Worker, Yanuses
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from disasters import DisasterManager
 from player_ai import PlayerAI
 from replay import (
@@ -220,6 +220,8 @@ def main():
     Factory.load_assets()
     TownCenter.load_assets()
     DefenseTower.load_assets()
+    Watchguard.load_assets()
+    Radar.load_assets()
 
     # Multiplayer connection phase
     net_session = None
@@ -316,6 +318,9 @@ def main():
     if net_session:
         import time as _time
         from commands import execute_command
+        # Input delay: tick 0 has no remote commands (they arrive one tick ahead)
+        net_session.remote_tick_ready = True
+        net_session.remote_commands = []
 
     running = True
     try:
@@ -367,7 +372,7 @@ def main():
                         state.placement_mode = None
                     else:
                         state.deselect_all()
-                elif event.key in (pygame.K_b, pygame.K_f, pygame.K_t, pygame.K_d, pygame.K_g):
+                elif event.key in (pygame.K_b, pygame.K_f, pygame.K_t, pygame.K_d, pygame.K_g, pygame.K_r):
                     has_worker = any(isinstance(u, Worker) for u in state.selected_units)
                     if has_worker:
                         if event.key == pygame.K_b:
@@ -380,6 +385,8 @@ def main():
                             state.placement_mode = "tower"
                         elif event.key == pygame.K_g:
                             state.placement_mode = "watchguard"
+                        elif event.key == pygame.K_r:
+                            state.placement_mode = "radar"
                     else:
                         floating_texts.append(FloatingText(
                             camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
@@ -789,26 +796,57 @@ def main():
         # Helper to check if a world-space rect is visible on screen
         visible_rect = pygame.Rect(cam_x - 100, cam_y - 100, WIDTH + 200, MAP_HEIGHT + 200)
 
-        # Draw mineral nodes (with camera offset)
-        for node in state.mineral_nodes:
+        # Fog of war: opponent entities only visible within vision range
+        if local_team == "player":
+            my_units, my_buildings = state.units, state.buildings
+            my_nodes = state.mineral_nodes
+        else:
+            my_units, my_buildings = state.ai_player.units, state.ai_player.buildings
+            my_nodes = state.ai_player.mineral_nodes
+
+        # Draw own mineral nodes (always visible)
+        for node in my_nodes:
             if visible_rect.collidepoint(node.x, node.y):
                 _draw_mineral_node_offset(screen, node, cam_x, cam_y)
 
-        # Draw buildings (with camera offset)
-        for building in state.buildings:
+        # Draw own buildings (always visible)
+        for building in my_buildings:
             if visible_rect.colliderect(building.rect):
                 _draw_building_offset(screen, building, cam_x, cam_y)
 
-        # Draw units (with camera offset)
-        for unit in state.units:
+        # Draw own units (always visible)
+        for unit in my_units:
             if visible_rect.collidepoint(int(unit.x), int(unit.y)):
                 _draw_unit_offset(screen, unit, cam_x, cam_y)
             if unit.attacking and unit.target_enemy:
                 _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
                                   unit.target_enemy, cam_x, cam_y, (255, 255, 0))
 
-        # Draw AI player (buildings, units, mineral nodes) with camera offset
-        _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect)
+        # Draw opponent entities (only if within vision range of own units/buildings)
+        if local_team == "player":
+            _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect,
+                                   fog_units=my_units, fog_buildings=my_buildings)
+        else:
+            # Opponent is state.units/buildings/mineral_nodes — draw with fog filter
+            for node in state.mineral_nodes:
+                if visible_rect.collidepoint(node.x, node.y) and \
+                   _is_visible_to_team(node.x, node.y, my_units, my_buildings):
+                    _draw_mineral_node_offset(screen, node, cam_x, cam_y)
+            for building in state.buildings:
+                if visible_rect.colliderect(building.rect):
+                    bx = building.x + building.w * 0.5
+                    by = building.y + building.h * 0.5
+                    if _is_visible_to_team(bx, by, my_units, my_buildings):
+                        _draw_building_offset(screen, building, cam_x, cam_y)
+            for unit in state.units:
+                if visible_rect.collidepoint(int(unit.x), int(unit.y)) and \
+                   _is_visible_to_team(unit.x, unit.y, my_units, my_buildings):
+                    _draw_unit_offset(screen, unit, cam_x, cam_y)
+                if unit.attacking and unit.target_enemy:
+                    _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
+                                      unit.target_enemy, cam_x, cam_y, (255, 255, 0))
+            # Draw own team (ai_player) with tinted sprites, always visible
+            _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect)
 
         # Draw enemies (with camera offset)
         for enemy in state.wave_manager.enemies:
@@ -820,6 +858,22 @@ def main():
 
         # Draw disaster effects (with camera offset)
         disaster_mgr.draw(screen, cam_x, cam_y)
+
+        # Fog of war dark overlay
+        fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+        fog_surf.fill((0, 0, 0, 140))
+        for u in my_units:
+            vr = u.vision_range
+            if vr > 0:
+                sx = int(u.x) - cam_x
+                sy = int(u.y) - cam_y
+                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
+        for b in my_buildings:
+            vr = _get_building_vision(b)
+            bx = int(b.x + b.w * 0.5) - cam_x
+            by = int(b.y + b.h * 0.5) - cam_y
+            pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
+        screen.blit(fog_surf, (0, 0))
 
         # Draw placement zones when in placement mode
         if state.placement_mode:
@@ -914,7 +968,10 @@ def main():
         hud.draw(screen, state, resource_flash_timer, local_team=local_team)
 
         # Draw minimap (fixed screen position, pass camera position)
-        minimap.draw(screen, state, camera_x, camera_y)
+        has_radar = any(isinstance(b, Radar) for b in my_buildings)
+        fog_fn = lambda ex, ey: _is_visible_to_team(ex, ey, my_units, my_buildings)
+        minimap.draw(screen, state, camera_x, camera_y,
+                     local_team=local_team, fog_visible_fn=fog_fn, has_radar=has_radar)
 
         # Paused overlay
         if paused:
@@ -957,6 +1014,34 @@ def main():
 
     pygame.quit()
     sys.exit()
+
+
+# --- Fog of war visibility check ---
+
+_FOW_BUILDING_VISION = 500  # default vision range for buildings
+
+def _get_building_vision(b):
+    """Return vision range for a building. Radar has explicit vision_range,
+    DefenseTower uses attack_range, others use default 500px."""
+    if hasattr(b, 'vision_range') and b.vision_range > 0:
+        return b.vision_range
+    if hasattr(b, 'attack_range') and b.attack_range > 0:
+        return b.attack_range
+    return _FOW_BUILDING_VISION
+
+def _is_visible_to_team(ex, ey, friendly_units, friendly_buildings):
+    """Check if world position (ex, ey) is within vision range of any friendly entity."""
+    for u in friendly_units:
+        vr = u.vision_range
+        if vr > 0 and (u.x - ex) ** 2 + (u.y - ey) ** 2 <= vr * vr:
+            return True
+    for b in friendly_buildings:
+        vr = _get_building_vision(b)
+        bx = b.x + b.w * 0.5
+        by = b.y + b.h * 0.5
+        if (bx - ex) ** 2 + (by - ey) ** 2 <= vr * vr:
+            return True
+    return False
 
 
 # --- Shared drawing helpers (eliminate duplication) ---
@@ -1138,19 +1223,32 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
         _draw_worker_extras(surface, unit, sx, sy)
 
 
-def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
-    """Draw all AI player entities with camera offset and orange tint."""
+def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect,
+                           fog_units=None, fog_buildings=None):
+    """Draw all AI player entities with camera offset and orange tint.
+
+    If fog_units/fog_buildings are provided, only draw entities visible to those
+    friendly entities (fog of war for multiplayer).
+    """
     ai_player._ensure_tinted_sprites()
+    fog = fog_units is not None
 
     # AI mineral nodes
     for node in ai_player.mineral_nodes:
         if visible_rect.collidepoint(node.x, node.y):
+            if fog and not _is_visible_to_team(node.x, node.y, fog_units, fog_buildings):
+                continue
             _draw_mineral_node_offset(surface, node, cam_x, cam_y)
 
     # AI buildings
     for building in ai_player.buildings:
         if not visible_rect.colliderect(building.rect):
             continue
+        if fog:
+            bx = building.x + building.w * 0.5
+            by = building.y + building.h * 0.5
+            if not _is_visible_to_team(bx, by, fog_units, fog_buildings):
+                continue
         ox = building.x - cam_x
         oy = building.y - cam_y
         tinted = ai_player._get_tinted_sprite(building)
@@ -1178,6 +1276,8 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
     for unit in ai_player.units:
         if not visible_rect.collidepoint(int(unit.x), int(unit.y)):
             continue
+        if fog and not _is_visible_to_team(unit.x, unit.y, fog_units, fog_buildings):
+            continue
         sx = int(unit.x) - cam_x
         sy = int(unit.y) - cam_y
         tinted = ai_player._get_tinted_sprite(unit)
@@ -1202,6 +1302,8 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect):
     # AI attack lines
     for ai_unit in ai_player.units:
         if ai_unit.attacking and ai_unit.target_enemy:
+            if fog and not _is_visible_to_team(ai_unit.x, ai_unit.y, fog_units, fog_buildings):
+                continue
             _draw_attack_line(surface, int(ai_unit.x) - cam_x, int(ai_unit.y) - cam_y,
                               ai_unit.target_enemy, cam_x, cam_y, (255, 140, 0))
 
@@ -1217,6 +1319,8 @@ def _get_placement_size(mode):
         return TOWER_SIZE
     elif mode == "watchguard":
         return WATCHGUARD_SIZE
+    elif mode == "radar":
+        return RADAR_SIZE
     return (64, 64)
 
 
@@ -1231,6 +1335,8 @@ def _get_placement_sprite(mode):
         return DefenseTower.sprite
     elif mode == "watchguard":
         return Watchguard.sprite
+    elif mode == "radar":
+        return Radar.sprite
     return None
 
 
@@ -1284,6 +1390,8 @@ def _replay_main(filename):
     Factory.load_assets()
     TownCenter.load_assets()
     DefenseTower.load_assets()
+    Watchguard.load_assets()
+    Radar.load_assets()
 
     # Init replay proxy sprites
     ReplayUnit.init_sprites()

@@ -1,4 +1,4 @@
-"""Building entities: TownCenter, Barracks, Factory, DefenseTower, Watchguard."""
+"""Building entities: TownCenter, Barracks, Factory, DefenseTower, Watchguard, Radar."""
 
 import math
 import os
@@ -13,7 +13,8 @@ from settings import (
     SELECT_COLOR, HEALTH_BAR_BG, HEALTH_BAR_FG,
     BARRACKS_SPRITE, FACTORY_SPRITE, TOWN_CENTER_SPRITE,
     TOWER_SIZE, TOWER_HP, TOWER_FIRE_RATE, TOWER_DAMAGE, TOWER_RANGE, TOWER_SPRITE, TOWER_BUILD_TIME,
-    WATCHGUARD_SIZE, WATCHGUARD_HP, WATCHGUARD_ZONE_RADIUS, WATCHGUARD_BUILD_TIME,
+    WATCHGUARD_SIZE, WATCHGUARD_HP, WATCHGUARD_ZONE_RADIUS, WATCHGUARD_BUILD_TIME, WATCHGUARD_SPRITE,
+    RADAR_SIZE, RADAR_HP, RADAR_BUILD_TIME, RADAR_VISION, RADAR_SPRITE,
 )
 from units import Soldier, Tank, Worker
 
@@ -160,8 +161,7 @@ class DefenseTower(Building):
 
     @classmethod
     def load_assets(cls):
-        if os.path.exists(TOWER_SPRITE):
-            cls.sprite = _load_sprite(TOWER_SPRITE, TOWER_SIZE)
+        cls.sprite = _load_sprite(TOWER_SPRITE, TOWER_SIZE)
 
     def __init__(self, x, y):
         super().__init__(x, y, TOWER_SIZE, hp=TOWER_HP)
@@ -295,6 +295,10 @@ class Watchguard(Building):
     build_time = WATCHGUARD_BUILD_TIME
     zone_radius = WATCHGUARD_ZONE_RADIUS
 
+    @classmethod
+    def load_assets(cls):
+        cls.sprite = _load_sprite(WATCHGUARD_SPRITE, WATCHGUARD_SIZE)
+
     def __init__(self, x, y):
         super().__init__(x, y, WATCHGUARD_SIZE, hp=WATCHGUARD_HP)
 
@@ -307,31 +311,32 @@ class Watchguard(Building):
     def update(self, dt):
         pass
 
+
+class Radar(Building):
+    """Provides 5000px vision range. Removes fog of war from the minimap."""
+    label = "Radar"
+    sprite = None
+    build_time = RADAR_BUILD_TIME
+    vision_range = RADAR_VISION
+
+    @classmethod
+    def load_assets(cls):
+        cls.sprite = _load_sprite(RADAR_SPRITE, RADAR_SIZE)
+
+    def __init__(self, x, y):
+        super().__init__(x, y, RADAR_SIZE, hp=RADAR_HP)
+
+    def can_train(self):
+        return (Worker, 0, 0)
+
+    def start_production(self, resource_mgr):
+        return False
+
+    def update(self, dt):
+        pass
+
     def draw(self, surface):
-        cx, cy = self.center
-        # Brown/tan watchtower look
-        pygame.draw.rect(surface, (140, 110, 60), (self.x, self.y, self.w, self.h))
-        pygame.draw.rect(surface, (100, 80, 40), (self.x, self.y, self.w, self.h), 2)
-        # Small tower top
-        pygame.draw.rect(surface, (160, 130, 70), (self.x + 8, self.y + 4, self.w - 16, self.h // 3))
-        # Flag
-        pygame.draw.line(surface, (80, 60, 30), (cx, self.y + 4), (cx, self.y - 8), 2)
-        pygame.draw.polygon(surface, (200, 50, 50), [(cx, self.y - 8), (cx + 10, self.y - 4), (cx, self.y)])
-
+        super().draw(surface)
         if self.selected:
-            pygame.draw.rect(surface, SELECT_COLOR, self.rect.inflate(6, 6), 2)
-            pygame.draw.circle(surface, (100, 140, 100, 80), (cx, cy), self.zone_radius, 1)
-
-        # Health bar
-        from utils import hp_bar_color, get_font
-        bar_w = self.w
-        bar_h = 4
-        bx_bar, by_bar = self.x, self.y - 8
-        pygame.draw.rect(surface, HEALTH_BAR_BG, (bx_bar, by_bar, bar_w, bar_h))
-        ratio = self.hp / self.max_hp
-        fill_w = int(bar_w * ratio)
-        pygame.draw.rect(surface, hp_bar_color(ratio), (bx_bar, by_bar, fill_w, bar_h))
-
-        label = get_font(18).render(self.label, True, (255, 255, 255))
-        label_rect = label.get_rect(center=(cx, self.y - 16))
-        surface.blit(label, label_rect)
+            cx, cy = self.center
+            pygame.draw.circle(surface, (100, 140, 100, 80), (cx, cy), self.vision_range, 1)

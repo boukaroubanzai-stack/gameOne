@@ -5,6 +5,7 @@ general map specifications:
 -the game is over when all AI buildings and combat units are destroyed (victory), or if all player units and buildings are destroyed (defeat).
 -Yanuses wave enemies exist but are currently disabled.
 -the game runs at 2x simulation speed.
+-an FPS counter is displayed in the top-right corner.
 -the player starts with 1 town center, 3 workers and 50 ressources.
 -there are 10 mineral nodes spread across the left/center of the map, each holding 2500 ressources.
 
@@ -152,10 +153,14 @@ command line options:
 -python game.py --join 192.168.1.5 9999  # join on custom port
 
 multiplayer:
--peer-to-peer TCP/IP for 2 human players. one hosts, the other joins using the host IP.
+-peer-to-peer UDP for 2 human players. one hosts, the other joins using the host IP.
+-reliable delivery layer: sequence numbers, piggybacked ACKs, 30ms retransmit for lost packets.
 -the host plays the left side (player), the joiner plays the right side (ai side).
 -both peers run the full game simulation locally with lockstep command synchronization.
 -player commands (move, mine, build, train, repair) are exchanged every 4 frames (~67ms at 60fps).
+-input delay buffering: commands are sent one tick ahead, giving the network a full tick interval to deliver them.
+-tick sync is non-blocking: the UI keeps running while waiting for remote commands.
 -UPnP port mapping is attempted automatically; manual port forwarding may be needed.
 -no AI opponent in multiplayer — both sides are human-controlled.
 -game runs at normal speed (1x) in multiplayer for deterministic synchronization.
+-fog of war: each player only sees opponent entities within vision range of their own units/buildings. buildings have 500px default vision. fog of war is rendering-only — both peers still run the full simulation.
