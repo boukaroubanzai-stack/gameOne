@@ -3,7 +3,7 @@
 import math
 import random
 from buildings import Barracks, Factory, TownCenter, DefenseTower
-from units import Worker, Soldier, Tank
+from units import Worker, Soldier, Scout, Tank
 from settings import (
     WORLD_W, WORLD_H,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
@@ -70,10 +70,10 @@ class PlayerAI:
         return sum(1 for u in state.units if isinstance(u, Tank) and u.alive)
 
     def _count_combat_units(self, state):
-        return sum(1 for u in state.units if isinstance(u, (Soldier, Tank)) and u.alive)
+        return sum(1 for u in state.units if isinstance(u, (Soldier, Scout, Tank)) and u.alive)
 
     def _get_combat_units(self, state):
-        return [u for u in state.units if isinstance(u, (Soldier, Tank)) and u.alive]
+        return [u for u in state.units if isinstance(u, (Soldier, Scout, Tank)) and u.alive]
 
     def _get_base_center(self, state):
         alive = [b for b in state.buildings if b.hp > 0]
@@ -228,7 +228,7 @@ class PlayerAI:
         resources = state.resource_manager.amount
 
         # Count enemy forces (AI opponent + wave enemies)
-        enemy_combat = sum(1 for u in ai_player.units if isinstance(u, (Soldier, Tank)) and u.alive)
+        enemy_combat = sum(1 for u in ai_player.units if isinstance(u, (Soldier, Scout, Tank)) and u.alive)
         enemy_combat += len(enemies)
 
         self._update_phase(num_workers, num_combat, enemy_combat)
@@ -370,7 +370,7 @@ class PlayerAI:
         elif self.attack_sent:
             alive_attackers = sum(
                 1 for u in state.units
-                if isinstance(u, (Soldier, Tank)) and u.alive and id(u) in self._attacking_units
+                if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units
             )
             if alive_attackers < 2:
                 self.attack_sent = False
@@ -385,7 +385,7 @@ class PlayerAI:
                 if new_target and new_target != self.attack_target:
                     self.attack_target = new_target
                     for u in state.units:
-                        if isinstance(u, (Soldier, Tank)) and u.alive and id(u) in self._attacking_units:
+                        if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units:
                             if not u.attacking and not u.waypoints:
                                 spread = random.randint(-80, 80), random.randint(-80, 80)
                                 u.set_target((new_target[0] + spread[0], new_target[1] + spread[1]))
@@ -475,7 +475,7 @@ class PlayerAI:
     def _retreat(self, state):
         base = self._get_base_center(state)
         for unit in state.units:
-            if isinstance(unit, (Soldier, Tank)) and unit.alive and id(unit) in self._attacking_units:
+            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive and id(unit) in self._attacking_units:
                 unit.target_enemy = None
                 unit.attacking = False
                 unit.set_target(base)
@@ -496,7 +496,7 @@ class PlayerAI:
                     dist = math.hypot(hu.x - bx, hu.y - by)
                     if dist < 300:
                         for unit in state.units:
-                            if isinstance(unit, (Soldier, Tank)) and unit.alive:
+                            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive:
                                 is_garrison = id(unit) in self._garrison_units
                                 unit_to_base = math.hypot(unit.x - bx, unit.y - by)
                                 if is_garrison or unit_to_base < 400:
@@ -511,7 +511,7 @@ class PlayerAI:
         lowest_hp = float("inf")
 
         for unit in state.units:
-            if not isinstance(unit, (Soldier, Tank)) or not unit.alive:
+            if not isinstance(unit, (Soldier, Scout, Tank)) or not unit.alive:
                 continue
             if not unit.attacking or not unit.target_enemy:
                 continue
@@ -525,7 +525,7 @@ class PlayerAI:
             return
 
         for unit in state.units:
-            if not isinstance(unit, (Soldier, Tank)) or not unit.alive:
+            if not isinstance(unit, (Soldier, Scout, Tank)) or not unit.alive:
                 continue
             if not unit.attacking:
                 continue
@@ -548,7 +548,7 @@ class PlayerAI:
         if not self.attack_sent or not self.attack_target:
             return
         for unit in state.units:
-            if not isinstance(unit, (Soldier, Tank)) or not unit.alive:
+            if not isinstance(unit, (Soldier, Scout, Tank)) or not unit.alive:
                 continue
             if not unit.attacking and not unit.waypoints:
                 if id(unit) in self._attacking_units:

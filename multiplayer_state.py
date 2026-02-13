@@ -5,7 +5,7 @@ import random
 import pygame
 from resources import ResourceManager
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
-from units import Worker, Soldier, Tank
+from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode
 from settings import (
     STARTING_WORKERS, AI_TC_POS, MINERAL_OFFSETS,
@@ -57,6 +57,8 @@ class RemotePlayer:
         self._sprites_tinted = True
         if Soldier.sprite:
             self._tinted_sprites["soldier"] = tint_surface(Soldier.sprite, AI_TINT_COLOR)
+        if Scout.sprite:
+            self._tinted_sprites["scout"] = tint_surface(Scout.sprite, AI_TINT_COLOR)
         if Tank.sprite:
             self._tinted_sprites["tank"] = tint_surface(Tank.sprite, AI_TINT_COLOR)
         if Worker.sprite:
@@ -77,6 +79,8 @@ class RemotePlayer:
     def _get_tinted_sprite(self, entity):
         if isinstance(entity, Soldier):
             return self._tinted_sprites.get("soldier")
+        elif isinstance(entity, Scout):
+            return self._tinted_sprites.get("scout")
         elif isinstance(entity, Tank):
             return self._tinted_sprites.get("tank")
         elif isinstance(entity, Worker):
@@ -221,7 +225,7 @@ class RemotePlayer:
                 continue
 
             # Auto-target: find nearest player unit/building in range
-            if isinstance(unit, (Soldier, Tank)):
+            if isinstance(unit, (Soldier, Scout, Tank)):
                 target = unit.find_target(player_units, player_buildings)
                 if target:
                     unit.hunting_target = None

@@ -3,11 +3,12 @@
 import pygame
 import settings
 from utils import get_font
+from units import Worker
 from settings import (
     HUD_HEIGHT,
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST, RADAR_COST,
-    SOLDIER_COST, TANK_COST, WORKER_COST,
+    SOLDIER_COST, SCOUT_COST, TANK_COST, WORKER_COST,
     TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL,
 )
 
@@ -21,6 +22,7 @@ WORKER_ACCENT = (180, 140, 60)
 TOWER_ACCENT = (120, 120, 140)
 WATCHGUARD_ACCENT = (140, 110, 60)
 RADAR_ACCENT = (100, 160, 100)
+SCOUT_ACCENT = (0, 180, 180)
 
 
 class HUD:
@@ -50,29 +52,37 @@ class HUD:
             "watchguard": pygame.Rect(720, y, btn_w, btn_h),
             "radar": pygame.Rect(830, y, btn_w, btn_h),
             "train": pygame.Rect(940, y, 120, btn_h),
+            "train_scout": pygame.Rect(1070, y, 120, btn_h),
         }
 
     def handle_click(self, pos, game_state, net_session=None, local_team="player"):
         if not self.is_in_hud(pos):
             return False
 
+        has_worker = any(isinstance(u, Worker) for u in game_state.selected_units)
         if self.buttons["towncenter"].collidepoint(pos):
-            game_state.placement_mode = "towncenter"
+            if has_worker:
+                game_state.placement_mode = "towncenter"
             return True
         if self.buttons["barracks"].collidepoint(pos):
-            game_state.placement_mode = "barracks"
+            if has_worker:
+                game_state.placement_mode = "barracks"
             return True
         if self.buttons["factory"].collidepoint(pos):
-            game_state.placement_mode = "factory"
+            if has_worker:
+                game_state.placement_mode = "factory"
             return True
         if self.buttons["tower"].collidepoint(pos):
-            game_state.placement_mode = "tower"
+            if has_worker:
+                game_state.placement_mode = "tower"
             return True
         if self.buttons["watchguard"].collidepoint(pos):
-            game_state.placement_mode = "watchguard"
+            if has_worker:
+                game_state.placement_mode = "watchguard"
             return True
         if self.buttons["radar"].collidepoint(pos):
-            game_state.placement_mode = "radar"
+            if has_worker:
+                game_state.placement_mode = "radar"
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
@@ -91,6 +101,25 @@ class HUD:
                         return "insufficient_funds"
                 else:
                     success = game_state.selected_building.start_production(game_state.resource_manager)
+                    if not success:
+                        return "insufficient_funds"
+            return True
+        if self.buttons["train_scout"].collidepoint(pos):
+            from buildings import Barracks
+            sb = game_state.selected_building
+            if sb and isinstance(sb, Barracks):
+                if net_session:
+                    local_rm = game_state.resource_manager if local_team == "player" else game_state.ai_player.resource_manager
+                    _, cost, _ = sb.can_train_scout()
+                    if local_rm.can_afford(cost):
+                        net_session.queue_command({
+                            "cmd": "train_scout",
+                            "building_id": sb.net_id,
+                        })
+                    else:
+                        return "insufficient_funds"
+                else:
+                    success = sb.start_production_scout(game_state.resource_manager)
                     if not success:
                         return "insufficient_funds"
             return True
@@ -142,25 +171,26 @@ class HUD:
             surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
                          (15, settings.MAP_HEIGHT + 56))
 
-        # Build buttons (with hotkey labels)
+        # Build buttons (with hotkey labels) — require worker selected + can afford
+        has_worker = any(isinstance(u, Worker) for u in game_state.selected_units)
         self._draw_button(surface, self.buttons["towncenter"],
                           f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(TOWN_CENTER_COST))
+                          has_worker and game_state.resource_manager.can_afford(TOWN_CENTER_COST))
         self._draw_button(surface, self.buttons["barracks"],
                           f"Barracks [B] ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(BARRACKS_COST))
+                          has_worker and game_state.resource_manager.can_afford(BARRACKS_COST))
         self._draw_button(surface, self.buttons["factory"],
                           f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(FACTORY_COST))
+                          has_worker and game_state.resource_manager.can_afford(FACTORY_COST))
         self._draw_button(surface, self.buttons["tower"],
                           f"Tower [D] ${TOWER_COST}", TOWER_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(TOWER_COST))
+                          has_worker and game_state.resource_manager.can_afford(TOWER_COST))
         self._draw_button(surface, self.buttons["watchguard"],
                           f"Guard [G] ${WATCHGUARD_COST}", WATCHGUARD_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(WATCHGUARD_COST))
+                          has_worker and game_state.resource_manager.can_afford(WATCHGUARD_COST))
         self._draw_button(surface, self.buttons["radar"],
                           f"Radar [R] ${RADAR_COST}", RADAR_ACCENT, mouse_pos,
-                          game_state.resource_manager.can_afford(RADAR_COST))
+                          has_worker and game_state.resource_manager.can_afford(RADAR_COST))
 
         # Placement mode indicator
         if game_state.placement_mode:
@@ -199,6 +229,14 @@ class HUD:
                     accent = TANK_ACCENT
                 self._draw_button(surface, self.buttons["train"],
                                   train_label, accent, mouse_pos, can_afford)
+                # Scout train button (only for Barracks)
+                from buildings import Barracks
+                if isinstance(sb, Barracks):
+                    scout_class, scout_cost, _ = sb.can_train_scout()
+                    scout_label = f"Train {scout_class.name} ${scout_cost}"
+                    scout_afford = game_state.resource_manager.can_afford(scout_cost)
+                    self._draw_button(surface, self.buttons["train_scout"],
+                                      scout_label, SCOUT_ACCENT, mouse_pos, scout_afford)
                 # Queue info
                 queue_len = len(sb.production_queue)
                 if queue_len > 0:
@@ -226,7 +264,6 @@ class HUD:
                     state_text = "Stuck" if u.stuck else "Attacking" if u.attacking else "Moving" if u.waypoints else "Idle"
                 else:
                     # Worker-specific info
-                    from units import Worker
                     if isinstance(u, Worker):
                         state_label = u.state.replace("_", " ").title()
                         carry_text = f"Carrying: {u.carry_amount}" if u.carry_amount > 0 else ""
@@ -240,12 +277,14 @@ class HUD:
                 surface.blit(self.font.render(f"Selected: {count} units", True, HUD_TEXT),
                              (info_x, settings.MAP_HEIGHT + 8))
                 # Summarize group
-                from units import Soldier, Tank, Worker
+                from units import Soldier, Scout, Tank
                 soldiers = sum(1 for u in game_state.selected_units if isinstance(u, Soldier))
+                scouts = sum(1 for u in game_state.selected_units if isinstance(u, Scout))
                 tanks = sum(1 for u in game_state.selected_units if isinstance(u, Tank))
                 workers = sum(1 for u in game_state.selected_units if isinstance(u, Worker))
                 parts = []
                 if soldiers: parts.append(f"{soldiers} Soldier{'s' if soldiers > 1 else ''}")
+                if scouts: parts.append(f"{scouts} Scout{'s' if scouts > 1 else ''}")
                 if tanks: parts.append(f"{tanks} Tank{'s' if tanks > 1 else ''}")
                 if workers: parts.append(f"{workers} Worker{'s' if workers > 1 else ''}")
                 surface.blit(self.small_font.render("  ".join(parts), True, HUD_TEXT),

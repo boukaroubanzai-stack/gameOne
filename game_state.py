@@ -5,7 +5,7 @@ import random
 import pygame
 from resources import ResourceManager
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
-from units import Worker, Soldier, Tank
+from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
 from ai_player import AIPlayer
@@ -542,7 +542,7 @@ class GameState:
                         unit.attacking = False
             else:
                 # Auto-target: soldiers/tanks fire at enemies AND AI units in range
-                if isinstance(unit, (Soldier, Tank)):
+                if isinstance(unit, (Soldier, Scout, Tank)):
                     target = unit.find_target(all_hostiles, self.ai_player.buildings)
                     if target:
                         unit.hunting_target = None
@@ -667,7 +667,7 @@ class GameState:
         # Victory: AI has no buildings and no combat units left
         ai_alive_buildings = [b for b in self.ai_player.buildings if b.hp > 0]
         ai_alive_combat = [u for u in self.ai_player.units
-                           if isinstance(u, (Soldier, Tank)) and u.alive]
+                           if isinstance(u, (Soldier, Scout, Tank)) and u.alive]
         if not ai_alive_buildings and not ai_alive_combat:
             self.game_over = True
             self.game_result = "victory"

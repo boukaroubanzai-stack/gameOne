@@ -112,9 +112,10 @@ class ReplayUnit:
 
     @classmethod
     def init_sprites(cls):
-        from units import Soldier, Tank, Worker, Yanuses
+        from units import Soldier, Scout, Tank, Worker, Yanuses
         cls._SPRITE_MAP = {
             "soldier": Soldier.sprite,
+            "scout": Scout.sprite,
             "tank": Tank.sprite,
             "worker": Worker.sprite,
             "yanuses": Yanuses.sprite,
@@ -219,12 +220,13 @@ class ReplayAIPlayer:
         if ReplayAIPlayer._class_sprites_tinted:
             return
         ReplayAIPlayer._class_sprites_tinted = True
-        from units import Soldier, Tank, Worker
+        from units import Soldier, Scout, Tank, Worker
         from buildings import TownCenter, Barracks, Factory
         from utils import tint_surface
         from ai_player import AI_TINT_COLOR
         sprite_map = {
             "soldier": Soldier.sprite,
+            "scout": Scout.sprite,
             "tank": Tank.sprite,
             "worker": Worker.sprite,
             "towncenter": TownCenter.sprite,

@@ -5,6 +5,8 @@ import pygame
 from settings import (
     SOLDIER_HP, SOLDIER_SPEED, SOLDIER_SIZE,
     SOLDIER_FIRE_RATE, SOLDIER_DAMAGE, SOLDIER_RANGE,
+    SCOUT_HP, SCOUT_SPEED, SCOUT_SIZE,
+    SCOUT_FIRE_RATE, SCOUT_DAMAGE, SCOUT_RANGE, SCOUT_VISION, SCOUT_SPRITE,
     TANK_HP, TANK_SPEED, TANK_SIZE,
     TANK_FIRE_RATE, TANK_DAMAGE, TANK_RANGE,
     WORKER_HP, WORKER_SPEED, WORKER_SIZE,
@@ -202,6 +204,32 @@ class Soldier(Unit):
         super().__init__(x, y, SOLDIER_HP, SOLDIER_SPEED, SOLDIER_SIZE,
                          team="player", fire_rate=SOLDIER_FIRE_RATE,
                          damage=SOLDIER_DAMAGE, attack_range=SOLDIER_RANGE)
+
+
+class Scout(Unit):
+    name = "Scout"
+    sprite = None
+
+    @classmethod
+    def load_assets(cls):
+        try:
+            cls.sprite = _load_sprite(SCOUT_SPRITE, (SCOUT_SIZE * 2, SCOUT_SIZE * 2))
+        except (FileNotFoundError, pygame.error):
+            # Fallback: create a simple colored circle sprite
+            size = SCOUT_SIZE * 2
+            cls.sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+            pygame.draw.circle(cls.sprite, (0, 200, 200), (SCOUT_SIZE, SCOUT_SIZE), SCOUT_SIZE)
+            pygame.draw.circle(cls.sprite, (0, 255, 255), (SCOUT_SIZE, SCOUT_SIZE), SCOUT_SIZE, 2)
+
+    def __init__(self, x, y):
+        super().__init__(x, y, SCOUT_HP, SCOUT_SPEED, SCOUT_SIZE,
+                         team="player", fire_rate=SCOUT_FIRE_RATE,
+                         damage=SCOUT_DAMAGE, attack_range=SCOUT_RANGE)
+        self._vision_range = SCOUT_VISION
+
+    @property
+    def vision_range(self):
+        return self._vision_range
 
 
 class Tank(Unit):

@@ -8,6 +8,7 @@ from settings import (
     BARRACKS_HP, FACTORY_HP, TOWN_CENTER_HP,
     BARRACKS_BUILD_TIME, FACTORY_BUILD_TIME, TOWN_CENTER_BUILD_TIME,
     SOLDIER_COST, SOLDIER_TRAIN_TIME,
+    SCOUT_COST, SCOUT_TRAIN_TIME,
     TANK_COST, TANK_TRAIN_TIME,
     WORKER_COST, WORKER_TRAIN_TIME,
     SELECT_COLOR, HEALTH_BAR_BG, HEALTH_BAR_FG,
@@ -16,7 +17,7 @@ from settings import (
     WATCHGUARD_SIZE, WATCHGUARD_HP, WATCHGUARD_ZONE_RADIUS, WATCHGUARD_BUILD_TIME, WATCHGUARD_SPRITE,
     RADAR_SIZE, RADAR_HP, RADAR_BUILD_TIME, RADAR_VISION, RADAR_SPRITE,
 )
-from units import Soldier, Tank, Worker
+from units import Soldier, Scout, Tank, Worker
 
 
 def _load_sprite(path, size):
@@ -136,6 +137,16 @@ class Barracks(Building):
 
     def can_train(self):
         return (Soldier, SOLDIER_COST, SOLDIER_TRAIN_TIME)
+
+    def can_train_scout(self):
+        return (Scout, SCOUT_COST, SCOUT_TRAIN_TIME)
+
+    def start_production_scout(self, resource_mgr):
+        unit_class, cost, train_time = self.can_train_scout()
+        if resource_mgr.spend(cost):
+            self.production_queue.append((unit_class, train_time))
+            return True
+        return False
 
 
 class Factory(Building):

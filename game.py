@@ -15,7 +15,7 @@ from utils import get_font, hp_bar_color, get_range_circle
 from game_state import GameState
 from hud import HUD
 from minimap import Minimap
-from units import Soldier, Tank, Worker, Yanuses
+from units import Soldier, Scout, Tank, Worker, Yanuses
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from disasters import DisasterManager
 from player_ai import PlayerAI
@@ -213,6 +213,7 @@ def main():
 
     # Load sprite assets (must happen after pygame.init())
     Soldier.load_assets()
+    Scout.load_assets()
     Tank.load_assets()
     Worker.load_assets()
     Yanuses.load_assets()
@@ -1383,6 +1384,7 @@ def _replay_main(filename):
 
     # Load sprite assets (must happen after pygame.init())
     Soldier.load_assets()
+    Scout.load_assets()
     Tank.load_assets()
     Worker.load_assets()
     Yanuses.load_assets()

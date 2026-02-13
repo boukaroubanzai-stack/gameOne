@@ -86,6 +86,18 @@ SOLDIER_FIRE_RATE = 5.0  # shots per second
 SOLDIER_DAMAGE = 10
 SOLDIER_RANGE = SOLDIER_SIZE * 7  # firing range
 
+# Scout
+SCOUT_COST = 250
+SCOUT_HP = 100
+SCOUT_SPEED = 240  # pixels per second
+SCOUT_SIZE = 16  # half-width
+SCOUT_TRAIN_TIME = 4.5  # seconds
+SCOUT_FIRE_RATE = 5.0  # shots per second
+SCOUT_DAMAGE = 2
+SCOUT_RANGE = 200  # firing range
+SCOUT_VISION = 300  # vision range override
+SCOUT_SPRITE = os.path.join(ASSETS_DIR, "scout.png")
+
 # Tank
 TANK_COST = 350
 TANK_HP = 500

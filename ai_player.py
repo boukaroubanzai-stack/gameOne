@@ -5,7 +5,7 @@ import random
 import pygame
 from resources import ResourceManager
 from buildings import Barracks, Factory, TownCenter, DefenseTower
-from units import Worker, Soldier, Tank
+from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode
 from settings import (
     WORLD_W, WORLD_H,
@@ -110,6 +110,8 @@ class AIPlayer:
         # Tint unit sprites
         if Soldier.sprite:
             self._tinted_sprites["soldier"] = tint_surface(Soldier.sprite, AI_TINT_COLOR)
+        if Scout.sprite:
+            self._tinted_sprites["scout"] = tint_surface(Scout.sprite, AI_TINT_COLOR)
         if Tank.sprite:
             self._tinted_sprites["tank"] = tint_surface(Tank.sprite, AI_TINT_COLOR)
         if Worker.sprite:
@@ -128,6 +130,8 @@ class AIPlayer:
         """Get the tinted sprite for an AI entity."""
         if isinstance(entity, Soldier):
             return self._tinted_sprites.get("soldier")
+        elif isinstance(entity, Scout):
+            return self._tinted_sprites.get("scout")
         elif isinstance(entity, Tank):
             return self._tinted_sprites.get("tank")
         elif isinstance(entity, Worker):
@@ -168,10 +172,10 @@ class AIPlayer:
         return sum(1 for u in self.units if isinstance(u, Tank) and u.alive)
 
     def _count_combat_units(self):
-        return sum(1 for u in self.units if isinstance(u, (Soldier, Tank)) and u.alive)
+        return sum(1 for u in self.units if isinstance(u, (Soldier, Scout, Tank)) and u.alive)
 
     def _get_combat_units(self):
-        return [u for u in self.units if isinstance(u, (Soldier, Tank)) and u.alive]
+        return [u for u in self.units if isinstance(u, (Soldier, Scout, Tank)) and u.alive]
 
     def _has_building(self, building_type):
         return any(isinstance(b, building_type) and b.hp > 0 for b in self.buildings)
@@ -393,7 +397,7 @@ class AIPlayer:
         resources = self.resource_manager.amount
 
         # Count player forces for adaptive behavior
-        player_combat = sum(1 for u in player_units if u.alive and isinstance(u, (Soldier, Tank)))
+        player_combat = sum(1 for u in player_units if u.alive and isinstance(u, (Soldier, Scout, Tank)))
 
         # Determine phase based on game state
         self._update_phase(num_workers, num_combat, player_combat)
@@ -564,7 +568,7 @@ class AIPlayer:
             # Check if attack wave is spent
             alive_attackers = sum(
                 1 for u in self.units
-                if isinstance(u, (Soldier, Tank)) and u.alive and id(u) in self._attacking_units
+                if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units
             )
             if alive_attackers < 2:
                 # Attack wave is spent, reset
@@ -584,7 +588,7 @@ class AIPlayer:
                     self.attack_target = new_target
                     # Re-send all idle attackers to the new target
                     for u in self.units:
-                        if isinstance(u, (Soldier, Tank)) and u.alive and id(u) in self._attacking_units:
+                        if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units:
                             if not u.attacking and not u.waypoints:
                                 spread = random.randint(-80, 80), random.randint(-80, 80)
                                 u.set_target((new_target[0] + spread[0], new_target[1] + spread[1]))
@@ -686,7 +690,7 @@ class AIPlayer:
         """Pull attacking units back to base."""
         base = self._get_base_center()
         for unit in self.units:
-            if isinstance(unit, (Soldier, Tank)) and unit.alive and id(unit) in self._attacking_units:
+            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive and id(unit) in self._attacking_units:
                 unit.target_enemy = None
                 unit.attacking = False
                 unit.set_target(base)
@@ -712,7 +716,7 @@ class AIPlayer:
                     if dist < 300:  # Increased detection range from 200
                         # Pull garrison units and nearby idle units to defend
                         for unit in self.units:
-                            if isinstance(unit, (Soldier, Tank)) and unit.alive:
+                            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive:
                                 is_garrison = id(unit) in self._garrison_units
                                 unit_to_base = math.hypot(unit.x - bx, unit.y - by)
                                 if is_garrison or unit_to_base < 400:
@@ -729,7 +733,7 @@ class AIPlayer:
         lowest_hp = float("inf")
 
         for unit in self.units:
-            if not isinstance(unit, (Soldier, Tank)) or not unit.alive:
+            if not isinstance(unit, (Soldier, Scout, Tank)) or not unit.alive:
                 continue
             if not unit.attacking or not unit.target_enemy:
                 continue
@@ -744,7 +748,7 @@ class AIPlayer:
 
         # Redirect other attacking units to this same target if in range
         for unit in self.units:
-            if not isinstance(unit, (Soldier, Tank)) or not unit.alive:
+            if not isinstance(unit, (Soldier, Scout, Tank)) or not unit.alive:
                 continue
             if not unit.attacking:
                 continue
@@ -909,7 +913,7 @@ class AIPlayer:
                 continue
 
             # Auto-target: find nearest player unit/building in range
-            if isinstance(unit, (Soldier, Tank)):
+            if isinstance(unit, (Soldier, Scout, Tank)):
                 target = unit.find_target(player_units, player_buildings)
                 if target:
                     unit.hunting_target = None

@@ -1,7 +1,7 @@
 """Multiplayer command execution: translates network commands into game actions."""
 
 import math
-from units import Worker, Soldier, Tank
+from units import Worker, Soldier, Scout, Tank
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from settings import (
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
@@ -85,6 +85,12 @@ def execute_command(cmd, game_state, team):
         building = _find_building(buildings, building_id)
         if building:
             building.start_production(resource_mgr)
+
+    elif cmd_type == "train_scout":
+        building_id = cmd["building_id"]
+        building = _find_building(buildings, building_id)
+        if building and hasattr(building, 'start_production_scout'):
+            building.start_production_scout(resource_mgr)
 
     elif cmd_type == "repair":
         target_type = cmd["target_type"]
