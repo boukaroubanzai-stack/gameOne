@@ -27,9 +27,28 @@ AI_UNIT_COLOR = (255, 200, 50)
 VIEWPORT_COLOR = (255, 255, 255)
 
 
+PING_COLOR = (255, 255, 0)
+PING_DURATION = 2.0
+
+
+class MinimapPing:
+    """An expanding, fading circle on the minimap."""
+    __slots__ = ('world_x', 'world_y', 'timer')
+
+    def __init__(self, world_x, world_y):
+        self.world_x = world_x
+        self.world_y = world_y
+        self.timer = 0.0
+
+    @property
+    def alive(self):
+        return self.timer < PING_DURATION
+
+
 class Minimap:
     def __init__(self):
         self.surface = pygame.Surface((MINIMAP_W, MINIMAP_H), pygame.SRCALPHA)
+        self.pings = []
         self._update_position()
 
     def _update_position(self):
@@ -41,6 +60,16 @@ class Minimap:
     def resize(self):
         """Call after screen resize to update minimap position."""
         self._update_position()
+
+    def add_ping(self, world_x, world_y):
+        """Add a ping at the given world coordinates."""
+        self.pings.append(MinimapPing(world_x, world_y))
+
+    def update_pings(self, dt):
+        """Update all pings, removing expired ones."""
+        for p in self.pings:
+            p.timer += dt
+        self.pings = [p for p in self.pings if p.alive]
 
     def _world_to_mini(self, wx, wy):
         """Convert world coordinates to minimap-local coordinates."""
@@ -164,6 +193,17 @@ class Minimap:
                 r = max(int(vr * SCALE_X), 1)
                 pygame.draw.circle(fog, (0, 0, 0, 0), (bx, by), r)
             surf.blit(fog, (0, 0))
+
+        # Draw pings (expanding circles that fade)
+        for ping in self.pings:
+            mx, my = self._world_to_mini(ping.world_x, ping.world_y)
+            progress = ping.timer / PING_DURATION
+            alpha = int(255 * (1 - progress))
+            radius = int(3 + 12 * progress)
+            if alpha > 0 and radius > 0:
+                ping_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(ping_surf, (*PING_COLOR, alpha), (radius, radius), radius, 2)
+                surf.blit(ping_surf, (mx - radius, my - radius))
 
         # Blit minimap surface onto screen
         screen.blit(surf, (self.minimap_x, self.minimap_y))

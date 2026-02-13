@@ -12,12 +12,14 @@ from settings import (
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
 from utils import get_font, hp_bar_color, get_range_circle
+from particles import ParticleManager
 from game_state import GameState
 from hud import HUD
 from minimap import Minimap
 from units import Soldier, Scout, Tank, Worker, Yanuses
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
 from disasters import DisasterManager
+from audio import AudioManager
 from player_ai import PlayerAI
 from replay import (
     ReplayRecorder, ReplayPlayer, ReplayUnit, ReplayBuilding,
@@ -211,6 +213,11 @@ def main():
     pygame.display.set_caption(caption)
     clock = pygame.time.Clock()
 
+    # Audio
+    audio = AudioManager()
+    audio.play_music()
+    game_over_sound_played = False
+
     # Load sprite assets (must happen after pygame.init())
     Soldier.load_assets()
     Scout.load_assets()
@@ -295,6 +302,8 @@ def main():
     # UX state
     move_markers = []
     floating_texts = []
+    particle_mgr = ParticleManager()
+    prev_hps = {}  # id(entity) -> hp, for damage number detection
     resource_flash_timer = 0.0  # > 0 means resource counter is flashing
     _local_rm = lambda: state.resource_manager if local_team == "player" else state.ai_player.resource_manager
     last_resource_amount = _local_rm().amount
@@ -314,6 +323,16 @@ def main():
     # Non-blocking net sync state
     net_waiting = False    # True while waiting for remote tick commands
     net_wait_start = 0.0   # time.time() when waiting started
+
+    # QOL state
+    control_groups = {}        # key: int 1-9, value: list of unit refs
+    attack_move_mode = False   # True when 'A' pressed waiting for click
+    last_click_time = 0.0      # for double-click detection
+    last_click_unit = None     # unit clicked last time (for double-click)
+
+    # Chat input state (multiplayer only)
+    chat_input_active = False
+    chat_input_text = ""
 
     # Pre-import for multiplayer (avoid re-importing every frame)
     if net_session:
@@ -367,9 +386,32 @@ def main():
                     paused = False
                 continue
 
+            # Chat input mode: capture all keyboard input for the chat box
+            if chat_input_active:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:
+                        if chat_input_text.strip() and net_session:
+                            net_session.queue_command({
+                                "cmd": "chat",
+                                "message": chat_input_text.strip(),
+                            })
+                        chat_input_active = False
+                        chat_input_text = ""
+                    elif event.key == pygame.K_ESCAPE:
+                        chat_input_active = False
+                        chat_input_text = ""
+                    elif event.key == pygame.K_BACKSPACE:
+                        chat_input_text = chat_input_text[:-1]
+                    else:
+                        if event.unicode and len(chat_input_text) < 100:
+                            chat_input_text += event.unicode
+                continue
+
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    if state.placement_mode:
+                    if attack_move_mode:
+                        attack_move_mode = False
+                    elif state.placement_mode:
                         state.placement_mode = None
                     else:
                         state.deselect_all()
@@ -392,6 +434,10 @@ def main():
                         floating_texts.append(FloatingText(
                             camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
                             "Select a worker first!", (255, 80, 80)))
+                # Multiplayer chat (Enter) and shared vision (V)
+                elif event.key == pygame.K_RETURN and net_session:
+                    chat_input_active = True
+                    chat_input_text = ""
                 # Arrow key scrolling
                 elif event.key == pygame.K_LEFT:
                     scroll_left = True
@@ -401,6 +447,62 @@ def main():
                     scroll_up = True
                 elif event.key == pygame.K_DOWN:
                     scroll_down = True
+
+                # --- QOL: Control groups (Ctrl+1-9 assign, 1-9 recall) ---
+                elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                                   pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9):
+                    group_num = event.key - pygame.K_0
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_CTRL:
+                        # Assign current selection to control group
+                        if state.selected_units:
+                            control_groups[group_num] = list(state.selected_units)
+                            floating_texts.append(FloatingText(
+                                camera_x + WIDTH // 2, camera_y + 30,
+                                f"Group {group_num} set ({len(state.selected_units)})", (100, 200, 255)))
+                    else:
+                        # Recall control group
+                        if group_num in control_groups:
+                            alive_units = [u for u in control_groups[group_num] if u.alive]
+                            control_groups[group_num] = alive_units
+                            if alive_units:
+                                state.select_units(alive_units)
+                                # Center camera on group
+                                avg_x = sum(u.x for u in alive_units) / len(alive_units)
+                                avg_y = sum(u.y for u in alive_units) / len(alive_units)
+                                camera_x = max(0, min(avg_x - WIDTH // 2, WORLD_W - WIDTH))
+                                camera_y = max(0, min(avg_y - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
+
+                # --- QOL: Attack-move mode (A key) ---
+                elif event.key == pygame.K_a:
+                    if state.selected_units and not state.placement_mode:
+                        has_combat = any(u.attack_range > 0 for u in state.selected_units)
+                        if has_combat:
+                            attack_move_mode = True
+
+                # --- QOL: Idle worker (. key) ---
+                elif event.key == pygame.K_PERIOD:
+                    local_units = state.units if local_team == "player" else state.ai_player.units
+                    idle_workers = [u for u in local_units if isinstance(u, Worker) and u.alive and u.state == "idle"]
+                    if idle_workers:
+                        worker = idle_workers[0]
+                        state.select_unit(worker)
+                        camera_x = max(0, min(worker.x - WIDTH // 2, WORLD_W - WIDTH))
+                        camera_y = max(0, min(worker.y - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
+
+                # --- QOL: Tab cycle buildings of same type ---
+                elif event.key == pygame.K_TAB:
+                    if state.selected_building:
+                        sb = state.selected_building
+                        sb_type = type(sb)
+                        local_buildings = state.buildings if local_team == "player" else state.ai_player.buildings
+                        same_type = [b for b in local_buildings if isinstance(b, sb_type) and b.hp > 0]
+                        if len(same_type) > 1:
+                            idx = same_type.index(sb) if sb in same_type else -1
+                            next_b = same_type[(idx + 1) % len(same_type)]
+                            state.select_building(next_b)
+                            camera_x = max(0, min(next_b.x + next_b.w // 2 - WIDTH // 2, WORLD_W - WIDTH))
+                            camera_y = max(0, min(next_b.y + next_b.h // 2 - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
 
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_LEFT:
@@ -426,12 +528,37 @@ def main():
                     # Check HUD first (screen coords)
                     if hud.is_in_hud(screen_pos):
                         result = hud.handle_click(screen_pos, state, net_session=net_session, local_team=local_team)
+                        if result and result != "insufficient_funds":
+                            audio.play_sound('click')
                         if result == "insufficient_funds":
                             resource_flash_timer = 0.5
+                        elif isinstance(result, tuple) and result[0] == "idle_worker":
+                            worker = result[1]
+                            camera_x = max(0, min(worker.x - WIDTH // 2, WORLD_W - WIDTH))
+                            camera_y = max(0, min(worker.y - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
                         continue
 
                     # Convert to world coords for map interactions
                     world_pos = _screen_to_world(screen_pos, camera_x, camera_y)
+
+                    # --- QOL: Attack-move click ---
+                    if attack_move_mode and state.selected_units:
+                        attack_move_mode = False
+                        selected_ids = [u.net_id for u in state.selected_units]
+                        if net_session:
+                            net_session.queue_command({
+                                "cmd": "move",
+                                "unit_ids": selected_ids,
+                                "x": world_pos[0], "y": world_pos[1],
+                            })
+                        else:
+                            state.command_move(world_pos)
+                        # Mark combat units as attack-moving
+                        for u in state.selected_units:
+                            if u.attack_range > 0:
+                                u.attack_move = True
+                        move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
+                        continue
 
                     # Placement mode
                     if state.placement_mode:
@@ -470,10 +597,23 @@ def main():
                     drag_rect_screen = None
 
                 elif event.button == 3:  # Right click
+                    attack_move_mode = False  # Cancel attack-move on right click
                     if state.placement_mode:
                         state.placement_mode = None
                         continue
                     screen_pos = event.pos
+
+                    # --- QOL: Rally point — right-click with building selected ---
+                    if not state.selected_units and state.selected_building:
+                        sb = state.selected_building
+                        if hasattr(sb, 'rally_x'):
+                            if not hud.is_in_hud(screen_pos):
+                                world_pos = _screen_to_world(screen_pos, camera_x, camera_y)
+                                sb.rally_x = world_pos[0]
+                                sb.rally_y = world_pos[1]
+                                move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
+                        continue
+
                     if not state.selected_units:
                         continue
 
@@ -606,7 +746,15 @@ def main():
                             })
                         else:
                             state.command_move(world_pos)
+                        # Clear attack-move flag on normal move
+                        for u in state.selected_units:
+                            u.attack_move = False
                         move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
+
+                elif event.button == 2:  # Middle click — minimap ping
+                    ping_world = minimap.minimap_to_world(event.pos)
+                    if ping_world:
+                        minimap.add_ping(ping_world[0], ping_world[1])
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1 and dragging:
@@ -622,6 +770,7 @@ def main():
                             units = state.get_units_in_rect(drag_rect)
                         if units:
                             state.select_units(units)
+                            audio.play_sound('select')
                         else:
                             state.deselect_all()
                     else:
@@ -632,14 +781,34 @@ def main():
                         else:
                             unit = state.get_unit_at(click_world)
                         if unit:
-                            state.select_unit(unit)
+                            # --- QOL: Double-click to select all same type on screen ---
+                            import time as _click_time
+                            now = _click_time.time()
+                            if (last_click_unit is not None and type(unit) is type(last_click_unit)
+                                    and now - last_click_time < 0.3):
+                                vis = pygame.Rect(cam_x, cam_y, WIDTH, MAP_HEIGHT)
+                                local_units = state.units if local_team == "player" else state.ai_player.units
+                                same_type = [u for u in local_units if type(u) is type(unit) and u.alive
+                                             and vis.collidepoint(int(u.x), int(u.y))]
+                                if same_type:
+                                    state.select_units(same_type)
+                                last_click_unit = None
+                                last_click_time = 0.0
+                            else:
+                                state.select_unit(unit)
+                                last_click_unit = unit
+                                last_click_time = now
+                            audio.play_sound('select')
                         else:
+                            last_click_unit = None
+                            last_click_time = 0.0
                             if net_session:
                                 building = state.get_local_building_at(click_world, local_team)
                             else:
                                 building = state.get_building_at(click_world)
                             if building:
                                 state.select_building(building)
+                                audio.play_sound('select')
                             else:
                                 state.deselect_all()
 
@@ -766,6 +935,36 @@ def main():
         if resource_flash_timer > 0:
             resource_flash_timer = max(0, resource_flash_timer - dt)
 
+        # Process pending deaths → spawn particles + sound
+        for dx, dy, team, kind in state.pending_deaths:
+            if kind == "building":
+                particle_mgr.spawn_building_death(dx, dy)
+            else:
+                particle_mgr.spawn_death(dx, dy, team)
+            audio.play_sound('explosion')
+        state.pending_deaths.clear()
+
+        # Spawn damage numbers by detecting HP decreases
+        curr_hps = {}
+        all_entities = (state.units + state.ai_player.units +
+                        state.wave_manager.enemies +
+                        state.buildings + state.ai_player.buildings)
+        for e in all_entities:
+            eid = id(e)
+            hp = e.hp
+            curr_hps[eid] = hp
+            if eid in prev_hps and hp < prev_hps[eid]:
+                dmg = int(prev_hps[eid] - hp)
+                if hasattr(e, 'w'):  # building
+                    ex, ey = e.x + e.w // 2, e.y + e.h // 2
+                else:
+                    ex, ey = e.x, e.y
+                particle_mgr.spawn_damage_number(ex, ey, dmg)
+        prev_hps = curr_hps
+
+        particle_mgr.update(dt)
+        minimap.update_pings(dt)
+
         # Detect resource deposits (floating text)
         current_amount = _local_rm().amount
         if current_amount > last_resource_amount:
@@ -831,17 +1030,17 @@ def main():
             # Opponent is state.units/buildings/mineral_nodes — draw with fog filter
             for node in state.mineral_nodes:
                 if visible_rect.collidepoint(node.x, node.y) and \
-                   _is_visible_to_team(node.x, node.y, my_units, my_buildings):
+                   (not _fog_active or _is_visible_to_team(node.x, node.y, my_units, my_buildings)):
                     _draw_mineral_node_offset(screen, node, cam_x, cam_y)
             for building in state.buildings:
                 if visible_rect.colliderect(building.rect):
                     bx = building.x + building.w * 0.5
                     by = building.y + building.h * 0.5
-                    if _is_visible_to_team(bx, by, my_units, my_buildings):
+                    if not _fog_active or _is_visible_to_team(bx, by, my_units, my_buildings):
                         _draw_building_offset(screen, building, cam_x, cam_y)
             for unit in state.units:
                 if visible_rect.collidepoint(int(unit.x), int(unit.y)) and \
-                   _is_visible_to_team(unit.x, unit.y, my_units, my_buildings):
+                   (not _fog_active or _is_visible_to_team(unit.x, unit.y, my_units, my_buildings)):
                     _draw_unit_offset(screen, unit, cam_x, cam_y)
                 if unit.attacking and unit.target_enemy:
                     _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
@@ -860,21 +1059,25 @@ def main():
         # Draw disaster effects (with camera offset)
         disaster_mgr.draw(screen, cam_x, cam_y)
 
-        # Fog of war dark overlay
-        fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
-        fog_surf.fill((0, 0, 0, 140))
-        for u in my_units:
-            vr = u.vision_range
-            if vr > 0:
-                sx = int(u.x) - cam_x
-                sy = int(u.y) - cam_y
-                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
-        for b in my_buildings:
-            vr = _get_building_vision(b)
-            bx = int(b.x + b.w * 0.5) - cam_x
-            by = int(b.y + b.h * 0.5) - cam_y
-            pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
-        screen.blit(fog_surf, (0, 0))
+        # Draw particles and damage numbers (with camera offset)
+        particle_mgr.draw(screen, cam_x, cam_y)
+
+        # Fog of war dark overlay (skip when shared vision is active)
+        if _fog_active:
+            fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+            fog_surf.fill((0, 0, 0, 140))
+            for u in my_units:
+                vr = u.vision_range
+                if vr > 0:
+                    sx = int(u.x) - cam_x
+                    sy = int(u.y) - cam_y
+                    pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
+            for b in my_buildings:
+                vr = _get_building_vision(b)
+                bx = int(b.x + b.w * 0.5) - cam_x
+                by = int(b.y + b.h * 0.5) - cam_y
+                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
+            screen.blit(fog_surf, (0, 0))
 
         # Draw placement zones when in placement mode
         if state.placement_mode:
@@ -934,6 +1137,30 @@ def main():
                     pygame.draw.circle(screen, (255, 255, 0),
                                        (int(wx) - cam_x, int(wy) - cam_y), 3, 1)
 
+        # --- QOL: Rally point visualization ---
+        if state.selected_building and hasattr(state.selected_building, 'rally_x'):
+            sb = state.selected_building
+            bcx = int(sb.x + sb.w // 2) - cam_x
+            bcy = int(sb.y + sb.h // 2) - cam_y
+            rx = int(sb.rally_x) - cam_x
+            ry = int(sb.rally_y) - cam_y
+            rally_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+            pygame.draw.line(rally_surf, (0, 200, 255, 160), (bcx, bcy), (rx, ry), 2)
+            pygame.draw.circle(rally_surf, (0, 200, 255, 200), (rx, ry), 6, 2)
+            pygame.draw.line(rally_surf, (0, 200, 255, 200), (rx, ry - 6), (rx, ry + 6), 1)
+            screen.blit(rally_surf, (0, 0))
+
+        # --- QOL: Attack-move cursor indicator ---
+        if attack_move_mode:
+            amx, amy = pygame.mouse.get_pos()
+            am_surf = pygame.Surface((24, 24), pygame.SRCALPHA)
+            pygame.draw.circle(am_surf, (255, 60, 60, 180), (12, 12), 10, 2)
+            pygame.draw.line(am_surf, (255, 60, 60, 180), (12, 4), (12, 20), 2)
+            pygame.draw.line(am_surf, (255, 60, 60, 180), (4, 12), (20, 12), 2)
+            screen.blit(am_surf, (amx - 12, amy - 12))
+            am_text = get_font(16).render("Attack Move", True, (255, 100, 100))
+            screen.blit(am_text, (amx + 14, amy - 8))
+
         # Draw move-order markers (world coords, offset by camera)
         for marker in move_markers:
             marker.draw(screen, cam_x, cam_y)
@@ -970,7 +1197,10 @@ def main():
 
         # Draw minimap (fixed screen position, pass camera position)
         has_radar = any(isinstance(b, Radar) for b in my_buildings)
-        fog_fn = lambda ex, ey: _is_visible_to_team(ex, ey, my_units, my_buildings)
+        if _fog_active:
+            fog_fn = lambda ex, ey: _is_visible_to_team(ex, ey, my_units, my_buildings)
+        else:
+            fog_fn = None
         minimap.draw(screen, state, camera_x, camera_y,
                      local_team=local_team, fog_visible_fn=fog_fn, has_radar=has_radar)
 
@@ -988,6 +1218,10 @@ def main():
 
         # Game over overlay
         if state.game_over:
+            if not game_over_sound_played:
+                game_over_sound_played = True
+                audio.stop_music()
+                audio.play_sound('victory' if state.game_result == "victory" else 'defeat')
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
             screen.blit(overlay, (0, 0))
@@ -1000,6 +1234,44 @@ def main():
             sub = get_font(32).render("Press ESC to quit", True, (200, 200, 200))
             sub_rect = sub.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 30))
             screen.blit(sub, sub_rect)
+
+        # Chat messages (top-left corner, multiplayer only)
+        if net_session and state.chat_log:
+            import time as _chat_time
+            now = _chat_time.time()
+            recent = [m for m in state.chat_log[-5:] if now - m["time"] < 8.0]
+            chat_y = 30
+            for msg in recent:
+                age = now - msg["time"]
+                alpha = 255 if age < 5.0 else int(255 * (1.0 - (age - 5.0) / 3.0))
+                alpha = max(0, min(255, alpha))
+                if msg["team"] == "system":
+                    color = (200, 200, 100)
+                    prefix = ""
+                elif msg["team"] == local_team:
+                    color = (100, 200, 255)
+                    prefix = "You: "
+                else:
+                    color = (255, 160, 80)
+                    prefix = "Opponent: "
+                text_surf = get_font(20).render(f"{prefix}{msg['message']}", True, color)
+                text_surf.set_alpha(alpha)
+                bg = pygame.Surface((text_surf.get_width() + 8, text_surf.get_height() + 4), pygame.SRCALPHA)
+                bg.fill((0, 0, 0, int(120 * alpha / 255)))
+                screen.blit(bg, (8, chat_y - 2))
+                screen.blit(text_surf, (12, chat_y))
+                chat_y += text_surf.get_height() + 4
+
+        # Chat input box
+        if chat_input_active:
+            input_y = MAP_HEIGHT - 30 if MAP_HEIGHT > 40 else 10
+            box_w = min(400, WIDTH - 20)
+            box_bg = pygame.Surface((box_w, 26), pygame.SRCALPHA)
+            box_bg.fill((0, 0, 0, 180))
+            screen.blit(box_bg, (10, input_y))
+            pygame.draw.rect(screen, (100, 200, 255), (10, input_y, box_w, 26), 1)
+            prompt = get_font(18).render(f"Chat: {chat_input_text}_", True, (255, 255, 255))
+            screen.blit(prompt, (14, input_y + 3))
 
         # FPS counter (top-right corner)
         fps_text = get_font(18).render(f"{int(clock.get_fps())} f/s", True, (200, 200, 200))

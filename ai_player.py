@@ -4,14 +4,14 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Radar
 from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode
 from settings import (
     WORLD_W, WORLD_H,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST,
-    SOLDIER_COST, TANK_COST, WORKER_COST,
-    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, RADAR_COST,
+    SOLDIER_COST, SCOUT_COST, TANK_COST, WORKER_COST,
+    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, RADAR_SIZE,
     STARTING_WORKERS,
     MINERAL_OFFSETS, AI_TC_POS,
 )
@@ -29,6 +29,7 @@ AI_MAX_WORKERS = 8  # Increased from 6 for stronger economy
 
 # Army composition targets
 AI_SOLDIER_RATIO = 3  # 3 soldiers per 1 tank
+AI_SCOUT_RATIO = 0.2  # ~20% of barracks production goes to scouts
 AI_ATTACK_THRESHOLD = 6  # min combat units before first attack wave
 AI_GARRISON_RATIO = 0.3  # keep 30% of army at base for defense
 AI_RETREAT_RATIO = 0.3  # retreat when army is < 30% of enemy force
@@ -47,12 +48,15 @@ class AIPlayer:
         self.think_interval = profile.get("think_interval", AI_THINK_INTERVAL)
         self.max_workers = profile.get("max_workers", AI_MAX_WORKERS)
         self.soldier_ratio = profile.get("soldier_ratio", AI_SOLDIER_RATIO)
+        self.scout_ratio = profile.get("scout_ratio", AI_SCOUT_RATIO)
         self.attack_threshold = profile.get("attack_threshold", AI_ATTACK_THRESHOLD)
         self.garrison_ratio = profile.get("garrison_ratio", AI_GARRISON_RATIO)
         self.retreat_ratio = profile.get("retreat_ratio", AI_RETREAT_RATIO)
         self.resource_reserve = profile.get("resource_reserve", AI_RESOURCE_RESERVE)
         self.build_towers = profile.get("build_towers", False)
         self.max_towers = profile.get("max_towers", 0)
+        self.build_radar = profile.get("build_radar", True)
+        self.focus_fire_always = profile.get("focus_fire_always", False)
 
         self.resource_manager = ResourceManager()
         self.buildings = []
@@ -75,6 +79,12 @@ class AIPlayer:
         self._retreat_cooldown = 0.0  # prevent immediate re-attack after retreat
         self._buildings_lost_recently = 0  # track building losses for adaptive behavior
         self._last_building_count = 0
+
+        # Scouting system
+        self._scouting_units = set()  # IDs of scouts on scouting duty
+        self._scouted_positions = []  # discovered enemy entity positions
+        self._scout_explore_targets = []  # random exploration waypoints
+        self._scout_timer = 0.0  # timer for periodic scout dispatching
 
         # Tinted sprites (created after pygame init, on first update)
         self._sprites_tinted = False
@@ -125,6 +135,8 @@ class AIPlayer:
             self._tinted_sprites["factory"] = tint_surface(Factory.sprite, AI_TINT_COLOR)
         if DefenseTower.sprite:
             self._tinted_sprites["tower"] = tint_surface(DefenseTower.sprite, AI_TINT_COLOR)
+        if Radar.sprite:
+            self._tinted_sprites["radar"] = tint_surface(Radar.sprite, AI_TINT_COLOR)
 
     def _get_tinted_sprite(self, entity):
         """Get the tinted sprite for an AI entity."""
@@ -144,6 +156,8 @@ class AIPlayer:
             return self._tinted_sprites.get("factory")
         elif isinstance(entity, DefenseTower):
             return self._tinted_sprites.get("tower")
+        elif isinstance(entity, Radar):
+            return self._tinted_sprites.get("radar")
         return None
 
     # --- Helper methods ---
@@ -167,6 +181,9 @@ class AIPlayer:
 
     def _count_soldiers(self):
         return sum(1 for u in self.units if isinstance(u, Soldier) and u.alive)
+
+    def _count_scouts(self):
+        return sum(1 for u in self.units if isinstance(u, Scout) and u.alive)
 
     def _count_tanks(self):
         return sum(1 for u in self.units if isinstance(u, Tank) and u.alive)
@@ -389,8 +406,9 @@ class AIPlayer:
         # Determine current game state
         num_workers = self._count_workers()
         num_soldiers = self._count_soldiers()
+        num_scouts = self._count_scouts()
         num_tanks = self._count_tanks()
-        num_combat = num_soldiers + num_tanks
+        num_combat = num_soldiers + num_scouts + num_tanks
         num_barracks = self._count_buildings_of_type(Barracks)
         num_factories = self._count_buildings_of_type(Factory)
         num_town_centers = self._count_buildings_of_type(TownCenter)
@@ -481,6 +499,12 @@ class AIPlayer:
             if all_factory_queues_full and num_factories < 2 and num_factories > 0:
                 self._try_place_building(Factory, FACTORY_COST, FACTORY_SIZE)
 
+        # Build Radar for extended vision (one is enough)
+        if self.build_radar and num_barracks >= 1:
+            num_radars = self._count_buildings_of_type(Radar)
+            if num_radars == 0 and resources >= RADAR_COST + self.resource_reserve:
+                self._try_place_building(Radar, RADAR_COST, RADAR_SIZE)
+
         # Build defense towers near existing buildings
         if self.build_towers and num_barracks >= 1:
             num_towers = self._count_buildings_of_type(DefenseTower)
@@ -502,19 +526,31 @@ class AIPlayer:
             self._buildings_lost_recently = max(0, self._buildings_lost_recently - 1)
 
     def _manage_military(self, num_soldiers, num_tanks, num_barracks, num_factories, resources):
-        """Train combat units maintaining a ~3:1 soldier:tank ratio."""
+        """Train combat units maintaining a ~3:1 soldier:tank ratio with ~20% scouts."""
         # Determine how aggressive to be with spending
         reserve = self.resource_reserve if self.phase != "attack" else 50
 
         # Calculate desired ratio
         desired_soldiers = (num_tanks + 1) * self.soldier_ratio
         need_soldiers = num_soldiers < desired_soldiers
+        num_scouts = self._count_scouts()
 
-        # Train soldiers from all barracks
+        # Train soldiers and scouts from all barracks
         all_barracks = self._get_all_buildings_of_type(Barracks)
         for barracks in all_barracks:
             if len(barracks.production_queue) < 3:  # Allow deeper queues
-                if need_soldiers or num_tanks > 0:
+                # Decide whether to train a scout or soldier
+                total_infantry = num_soldiers + num_scouts
+                should_train_scout = (
+                    self.scout_ratio > 0
+                    and total_infantry > 0
+                    and num_scouts / max(total_infantry, 1) < self.scout_ratio
+                )
+                if should_train_scout and resources > SCOUT_COST + reserve:
+                    if barracks.start_production_scout(self.resource_manager):
+                        resources = self.resource_manager.amount
+                        num_scouts += 1
+                elif need_soldiers or num_tanks > 0:
                     if resources > SOLDIER_COST + reserve:
                         if self._try_train_unit(barracks, self.resource_manager):
                             resources = self.resource_manager.amount
@@ -538,6 +574,9 @@ class AIPlayer:
 
     def _manage_combat(self, player_units, player_buildings, num_combat, player_combat):
         """Handle attack waves, scouting, retreating, and defense."""
+        # Update active scouts
+        self._update_scouting(player_units, player_buildings)
+
         # Handle retreat cooldown
         if self._retreat_cooldown > 0:
             self._retreat_cooldown -= self.think_interval
@@ -557,7 +596,7 @@ class AIPlayer:
         if resource_advantage:
             effective_threshold = max(3, self.attack_threshold - 2)
 
-        # SCOUTING: Send a scout before the main army
+        # SCOUTING: Send scouts before the main army
         if not self._scout_sent and not self._enemy_base_location and num_combat >= 2:
             self._send_scout(player_units, player_buildings)
 
@@ -576,6 +615,8 @@ class AIPlayer:
                 self._attacking_units.clear()
                 self._scout_sent = False
                 self._enemy_base_location = None
+                self._scouting_units.clear()
+                self._scouted_positions.clear()
 
             # Check if we should retreat (badly outnumbered)
             elif player_combat > 0 and alive_attackers / max(player_combat, 1) < self.retreat_ratio:
@@ -597,26 +638,103 @@ class AIPlayer:
                     self.attack_sent = False
                     self._attacking_units.clear()
 
-    def _send_scout(self, player_units, player_buildings):
-        """Send a single fast unit to find the player's base."""
-        for unit in self.units:
-            if isinstance(unit, Soldier) and unit.alive and not unit.attacking:
-                if id(unit) not in self._attacking_units:
-                    # Send toward the player side of the map
-                    target = None
-                    for b in player_buildings:
-                        if b.hp > 0:
-                            target = (b.x + b.w // 2, b.y + b.h // 2)
-                            break
-                    if target is None:
-                        # Scout toward left side of map
-                        target = (200, WORLD_H // 2)
+    def _generate_explore_targets(self):
+        """Generate random exploration waypoints across the map."""
+        targets = []
+        # Cover the player half of the map (left side) with some randomness
+        for _ in range(6):
+            x = random.randint(200, WORLD_W // 2)
+            y = random.randint(200, WORLD_H - 200)
+            targets.append((x, y))
+        # Add center of map
+        targets.append((WORLD_W // 2, WORLD_H // 2))
+        random.shuffle(targets)
+        return targets
 
+    def _send_scout(self, player_units, player_buildings):
+        """Send 1-2 Scout units to explore the map and find the enemy base."""
+        # Prefer actual Scout units, fall back to Soldiers
+        available_scouts = [
+            u for u in self.units
+            if isinstance(u, Scout) and u.alive and not u.attacking
+            and id(u) not in self._attacking_units
+            and id(u) not in self._scouting_units
+        ]
+        if not available_scouts:
+            available_scouts = [
+                u for u in self.units
+                if isinstance(u, Soldier) and u.alive and not u.attacking
+                and id(u) not in self._attacking_units
+                and id(u) not in self._scouting_units
+            ]
+        if not available_scouts:
+            return
+
+        # Send up to 2 scouts
+        num_to_send = min(2, len(available_scouts))
+        if not self._scout_explore_targets:
+            self._scout_explore_targets = self._generate_explore_targets()
+
+        for i in range(num_to_send):
+            scout = available_scouts[i]
+
+            # If we already know about player buildings, send directly
+            target = None
+            for b in player_buildings:
+                if b.hp > 0:
+                    target = (b.x + b.w // 2, b.y + b.h // 2)
+                    self._scouted_positions.append(target)
+                    break
+
+            if target is None and self._scout_explore_targets:
+                target = self._scout_explore_targets.pop(0)
+            elif target is None:
+                target = (200, WORLD_H // 2)
+
+            scout.set_target(target)
+            self._scouting_units.add(id(scout))
+
+        self._scout_sent = True
+        if self._scouted_positions:
+            self._enemy_base_location = self._scouted_positions[0]
+        elif player_buildings:
+            for b in player_buildings:
+                if b.hp > 0:
+                    self._enemy_base_location = (b.x + b.w // 2, b.y + b.h // 2)
+                    break
+
+    def _update_scouting(self, player_units, player_buildings):
+        """Update scout units: record enemy positions and reassign idle scouts."""
+        # Clean up dead scouts
+        alive_ids = {id(u) for u in self.units if u.alive}
+        self._scouting_units &= alive_ids
+
+        for unit in self.units:
+            if id(unit) not in self._scouting_units:
+                continue
+            if not unit.alive:
+                continue
+
+            # Record any visible enemy positions
+            for b in player_buildings:
+                if b.hp > 0:
+                    pos = (b.x + b.w // 2, b.y + b.h // 2)
+                    dist = math.hypot(unit.x - pos[0], unit.y - pos[1])
+                    if dist < getattr(unit, 'vision_range', 400):
+                        if pos not in self._scouted_positions:
+                            self._scouted_positions.append(pos)
+                        self._enemy_base_location = pos
+
+            # If scout has reached its target (no waypoints), give it a new explore target
+            if not unit.waypoints and not unit.attacking:
+                if self._scout_explore_targets:
+                    target = self._scout_explore_targets.pop(0)
                     unit.set_target(target)
-                    self._scout_sent = True
-                    self._scout_unit_id = id(unit)
-                    self._enemy_base_location = target
-                    return
+                else:
+                    # Done exploring, refresh targets
+                    self._scout_explore_targets = self._generate_explore_targets()
+                    target = self._scout_explore_targets.pop(0)
+                    unit.set_target(target)
 
     def _launch_attack_wave(self, player_units, player_buildings, num_combat, player_combat):
         """Send an attack wave, keeping some units as garrison."""
@@ -628,6 +746,8 @@ class AIPlayer:
         self.attack_sent = True
 
         # Determine how many units to send (keep garrison at base)
+        # Recall scouting units for the attack wave
+        self._scouting_units.clear()
         combat_units = self._get_combat_units()
         num_to_send = max(3, int(len(combat_units) * (1.0 - self.garrison_ratio)))
 
@@ -657,7 +777,7 @@ class AIPlayer:
         self._last_attack_army_size = sent
 
     def _find_attack_target(self, player_units, player_buildings):
-        """Find the best target to attack: prioritize production buildings."""
+        """Find the best target to attack: prioritize production buildings, use scouted positions."""
         target = None
         best_priority = float("inf")
 
@@ -684,6 +804,10 @@ class AIPlayer:
                     target = (u.x, u.y)
                     break
 
+        # Fall back to scouted positions if no visible targets
+        if target is None and self._scouted_positions:
+            target = self._scouted_positions[0]
+
         return target
 
     def _retreat(self):
@@ -699,6 +823,8 @@ class AIPlayer:
         self._attacking_units.clear()
         self._scout_sent = False
         self._enemy_base_location = None
+        self._scouting_units.clear()
+        self._scouted_positions.clear()
         # Set retreat cooldown: wait before next attack, and build a bigger force
         self._retreat_cooldown = 8.0
 
@@ -862,6 +988,9 @@ class AIPlayer:
             self._think(player_units, player_buildings)
             # Apply focus fire after thinking
             self._apply_focus_fire(player_units, player_buildings)
+        elif self.focus_fire_always:
+            # Hard AI: apply focus fire every frame for better micro
+            self._apply_focus_fire(player_units, player_buildings)
 
         # Update building production and tower combat
         for building in self.buildings:
@@ -968,6 +1097,7 @@ class AIPlayer:
         alive_ids = {id(u) for u in self.units if u.alive}
         self._attacking_units &= alive_ids
         self._garrison_units &= alive_ids
+        self._scouting_units &= alive_ids
 
         # Remove dead AI units (release mining nodes / cancel deploy first)
         for u in self.units:

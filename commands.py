@@ -92,6 +92,16 @@ def execute_command(cmd, game_state, team):
         if building and hasattr(building, 'start_production_scout'):
             building.start_production_scout(resource_mgr)
 
+    elif cmd_type == "chat":
+        import time
+        game_state.chat_log.append({
+            "team": team,
+            "message": cmd["message"],
+            "time": time.time(),
+        })
+        return
+
+
     elif cmd_type == "repair":
         target_type = cmd["target_type"]
         target_id = cmd["target_id"]

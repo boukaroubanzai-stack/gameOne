@@ -14,6 +14,7 @@ from settings import (
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST, RADAR_COST,
     PLAYER_TC_POS,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
+    SUPPLY_PER_TC, TANK_SUPPLY,
 )
 
 
@@ -33,6 +34,7 @@ class GameState:
         self._unit_by_net_id: dict[int, object] = {}
         self._building_by_net_id: dict[int, object] = {}
         self._cached_all_units = None  # rebuilt once per frame
+        self.pending_deaths = []  # [(x, y, team, "unit"/"building")] for visual effects
         if multiplayer:
             from multiplayer_state import RemotePlayer
             self.ai_player = RemotePlayer()
@@ -40,6 +42,7 @@ class GameState:
             self.ai_player = AIPlayer(profile=ai_profile)
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
+        self.chat_log = []        # list of {"team": str, "message": str, "time": float}
         if random_seed is not None:
             random.seed(random_seed)
 
@@ -174,6 +177,70 @@ class GameState:
                     best = b
         return best
 
+    # --- Supply / population cap ---
+
+    @staticmethod
+    def _unit_supply_cost(unit):
+        """Return supply cost for a unit instance."""
+        if isinstance(unit, Tank):
+            return TANK_SUPPLY
+        return 1  # Worker, Soldier, Scout
+
+    @staticmethod
+    def _unit_supply_cost_class(unit_class):
+        """Return supply cost for a unit class."""
+        if unit_class is Tank:
+            return TANK_SUPPLY
+        return 1
+
+    def current_supply(self, team="player"):
+        """Count total supply used by alive units + units in production queues."""
+        units = self.units if team == "player" else self.ai_player.units
+        buildings = self.buildings if team == "player" else self.ai_player.buildings
+        total = 0
+        for u in units:
+            total += self._unit_supply_cost(u)
+        for b in buildings:
+            for unit_class, _ in b.production_queue:
+                total += self._unit_supply_cost_class(unit_class)
+        return total
+
+    def max_supply(self, team="player"):
+        """Count maximum supply from Town Centers."""
+        buildings = self.buildings if team == "player" else self.ai_player.buildings
+        tc_count = sum(1 for b in buildings if isinstance(b, TownCenter) and b.hp > 0)
+        return tc_count * SUPPLY_PER_TC
+
+    def supply_available(self, unit_class, team="player"):
+        """Check if there's enough supply to train this unit type."""
+        cost = self._unit_supply_cost_class(unit_class)
+        return self.current_supply(team) + cost <= self.max_supply(team)
+
+    # --- Unit formations ---
+
+    @staticmethod
+    def _calculate_formation_positions(target, units):
+        """Calculate grid formation positions around target for a group of units."""
+        n = len(units)
+        if n <= 1:
+            return [target] * n
+        cols = math.ceil(math.sqrt(n))
+        rows = math.ceil(n / cols)
+        avg_size = sum(u.size for u in units) / n
+        spacing = avg_size * 3
+        total_w = (cols - 1) * spacing
+        total_h = (rows - 1) * spacing
+        start_x = target[0] - total_w / 2
+        start_y = target[1] - total_h / 2
+        positions = []
+        for i in range(n):
+            row = i // cols
+            col = i % cols
+            px = start_x + col * spacing
+            py = start_y + row * spacing
+            positions.append((px, py))
+        return positions
+
     def command_mine(self, node):
         # Check that at least one town center exists
         tc = self._find_nearest_town_center(node.x, node.y)
@@ -283,20 +350,22 @@ class GameState:
         return 0
 
     def command_move(self, pos):
-        for unit in self.selected_units:
+        positions = self._calculate_formation_positions(pos, self.selected_units)
+        for unit, target in zip(self.selected_units, positions):
             if isinstance(unit, Worker):
                 refund = unit.cancel_deploy()
                 if refund > 0:
                     self.resource_manager.deposit(refund)
-            unit.set_target(pos)
+            unit.set_target(target)
 
     def command_queue_waypoint(self, pos):
-        for unit in self.selected_units:
+        positions = self._calculate_formation_positions(pos, self.selected_units)
+        for unit, target in zip(self.selected_units, positions):
             if isinstance(unit, Worker):
                 refund = unit.cancel_deploy()
                 if refund > 0:
                     self.resource_manager.deposit(refund)
-            unit.add_waypoint(pos)
+            unit.add_waypoint(target)
 
     def _place_unit_at_free_spot(self, unit):
         """Nudge a newly spawned unit to a free spot if it overlaps an existing unit."""
@@ -632,8 +701,21 @@ class GameState:
                     self._place_unit_at_free_spot(new_unit)
                     self.units.append(new_unit)
 
+        # Record wave enemy deaths before wave_manager cleanup
+        for e in self.wave_manager.enemies:
+            if not e.alive:
+                self.pending_deaths.append((e.x, e.y, e.team, "unit"))
+
         # Update wave manager (spawning, enemy AI against player + AI player)
         self.wave_manager.update(dt, self.units, self.buildings)
+
+        # Record AI deaths before ai_player.update() cleans them up
+        for u in self.ai_player.units:
+            if not u.alive:
+                self.pending_deaths.append((u.x, u.y, u.team, "unit"))
+        for b in self.ai_player.buildings:
+            if b.hp <= 0:
+                self.pending_deaths.append((b.x + b.w // 2, b.y + b.h // 2, b.team, "building"))
 
         # Update AI player
         self.ai_player.update(dt, self.units, self.buildings, self._cached_all_units)
@@ -641,6 +723,7 @@ class GameState:
         # Remove dead player units
         dead_units = [u for u in self.units if not u.alive]
         for u in dead_units:
+            self.pending_deaths.append((u.x, u.y, u.team, "unit"))
             if u in self.selected_units:
                 self.selected_units.remove(u)
                 u.selected = False
@@ -654,6 +737,7 @@ class GameState:
         # Remove dead buildings
         dead_buildings = [b for b in self.buildings if b.hp <= 0]
         for b in dead_buildings:
+            self.pending_deaths.append((b.x + b.w // 2, b.y + b.h // 2, b.team, "building"))
             if b is self.selected_building:
                 self.selected_building = None
             if b.net_id is not None:

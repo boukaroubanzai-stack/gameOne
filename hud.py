@@ -53,6 +53,7 @@ class HUD:
             "radar": pygame.Rect(830, y, btn_w, btn_h),
             "train": pygame.Rect(940, y, 120, btn_h),
             "train_scout": pygame.Rect(1070, y, 120, btn_h),
+            "idle_worker": pygame.Rect(280, y + btn_h + 4, 110, 28),
         }
 
     def handle_click(self, pos, game_state, net_session=None, local_team="player"):
@@ -86,18 +87,21 @@ class HUD:
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
+                # Supply cap check
+                try:
+                    unit_class, cost, _ = game_state.selected_building.can_train()
+                    if not game_state.supply_available(unit_class, local_team):
+                        return "insufficient_funds"
+                except (NotImplementedError, TypeError):
+                    return "insufficient_funds"
                 if net_session:
                     local_rm = game_state.resource_manager if local_team == "player" else game_state.ai_player.resource_manager
-                    try:
-                        _, cost, _ = game_state.selected_building.can_train()
-                        if local_rm.can_afford(cost):
-                            net_session.queue_command({
-                                "cmd": "train_unit",
-                                "building_id": game_state.selected_building.net_id,
-                            })
-                        else:
-                            return "insufficient_funds"
-                    except (NotImplementedError, TypeError):
+                    if local_rm.can_afford(cost):
+                        net_session.queue_command({
+                            "cmd": "train_unit",
+                            "building_id": game_state.selected_building.net_id,
+                        })
+                    else:
                         return "insufficient_funds"
                 else:
                     success = game_state.selected_building.start_production(game_state.resource_manager)
@@ -108,9 +112,12 @@ class HUD:
             from buildings import Barracks
             sb = game_state.selected_building
             if sb and isinstance(sb, Barracks):
+                # Supply cap check
+                scout_class, cost, _ = sb.can_train_scout()
+                if not game_state.supply_available(scout_class, local_team):
+                    return "insufficient_funds"
                 if net_session:
                     local_rm = game_state.resource_manager if local_team == "player" else game_state.ai_player.resource_manager
-                    _, cost, _ = sb.can_train_scout()
                     if local_rm.can_afford(cost):
                         net_session.queue_command({
                             "cmd": "train_scout",
@@ -122,6 +129,13 @@ class HUD:
                     success = sb.start_production_scout(game_state.resource_manager)
                     if not success:
                         return "insufficient_funds"
+            return True
+        if self.buttons["idle_worker"].collidepoint(pos):
+            local_units = game_state.units if local_team == "player" else game_state.ai_player.units
+            idle_workers = [u for u in local_units if isinstance(u, Worker) and u.alive and u.state == "idle"]
+            if idle_workers:
+                game_state.select_unit(idle_workers[0])
+                return ("idle_worker", idle_workers[0])
             return True
         return True
 
@@ -147,6 +161,15 @@ class HUD:
             res_color = (255, 215, 0)
         surface.blit(self.font.render(res_text, True, res_color),
                      (15, settings.MAP_HEIGHT + 10))
+
+        # Supply display (right of resources)
+        cur_supply = game_state.current_supply(local_team)
+        max_sup = game_state.max_supply(local_team)
+        supply_text = f"Supply: {cur_supply}/{max_sup}"
+        supply_color = (255, 80, 80) if cur_supply >= max_sup else (180, 220, 180)
+        res_width = self.font.size(res_text)[0]
+        surface.blit(self.font.render(supply_text, True, supply_color),
+                     (15 + res_width + 20, settings.MAP_HEIGHT + 10))
 
         # Wave info + countdown timer
         wm = game_state.wave_manager
@@ -192,6 +215,13 @@ class HUD:
                           f"Radar [R] ${RADAR_COST}", RADAR_ACCENT, mouse_pos,
                           has_worker and game_state.resource_manager.can_afford(RADAR_COST))
 
+        # Idle worker button
+        local_units = game_state.units if local_team == "player" else game_state.ai_player.units
+        idle_count = sum(1 for u in local_units if isinstance(u, Worker) and u.alive and u.state == "idle")
+        idle_label = f"Idle Workers [{'.'}] ({idle_count})"
+        self._draw_button(surface, self.buttons["idle_worker"],
+                          idle_label, WORKER_ACCENT, mouse_pos, idle_count > 0)
+
         # Placement mode indicator
         if game_state.placement_mode:
             mode_text = f"Placing: {game_state.placement_mode.title()} (click map | ESC to cancel)"
@@ -220,7 +250,7 @@ class HUD:
                 # Train button
                 unit_class, cost, _ = sb.can_train()
                 train_label = f"Train {unit_class.name} ${cost}"
-                can_afford = game_state.resource_manager.can_afford(cost)
+                can_afford = game_state.resource_manager.can_afford(cost) and game_state.supply_available(unit_class, local_team)
                 if unit_class.name == "Worker":
                     accent = WORKER_ACCENT
                 elif unit_class.name == "Soldier":
@@ -234,16 +264,38 @@ class HUD:
                 if isinstance(sb, Barracks):
                     scout_class, scout_cost, _ = sb.can_train_scout()
                     scout_label = f"Train {scout_class.name} ${scout_cost}"
-                    scout_afford = game_state.resource_manager.can_afford(scout_cost)
+                    scout_afford = game_state.resource_manager.can_afford(scout_cost) and game_state.supply_available(scout_class, local_team)
                     self._draw_button(surface, self.buttons["train_scout"],
                                       scout_label, SCOUT_ACCENT, mouse_pos, scout_afford)
-                # Queue info
+                # Queue info with visual display
                 queue_len = len(sb.production_queue)
                 if queue_len > 0:
                     prog = sb.production_progress
                     queue_text = f"Queue: {queue_len} | Progress: {int(prog * 100)}%"
                     surface.blit(self.small_font.render(queue_text, True, HUD_TEXT),
                                  (info_x, settings.MAP_HEIGHT + 58))
+                    # Draw queued unit icons as small colored squares
+                    sq_x = info_x + self.small_font.size(queue_text)[0] + 10
+                    sq_y = settings.MAP_HEIGHT + 60
+                    sq_size = 14
+                    for qi, (qclass, _) in enumerate(sb.production_queue):
+                        if qi >= 10:
+                            break
+                        if qclass.name == "Soldier":
+                            sq_color = SOLDIER_ACCENT
+                        elif qclass.name == "Scout":
+                            sq_color = SCOUT_ACCENT
+                        elif qclass.name == "Tank":
+                            sq_color = TANK_ACCENT
+                        elif qclass.name == "Worker":
+                            sq_color = WORKER_ACCENT
+                        else:
+                            sq_color = (150, 150, 150)
+                        r = pygame.Rect(sq_x + qi * (sq_size + 3), sq_y, sq_size, sq_size)
+                        pygame.draw.rect(surface, sq_color, r, border_radius=2)
+                        if qi == 0:
+                            # First in queue: show progress outline
+                            pygame.draw.rect(surface, (0, 180, 255), r, 2, border_radius=2)
 
         # Selected units info
         elif game_state.selected_units:
@@ -295,7 +347,7 @@ class HUD:
                              (info_x, settings.MAP_HEIGHT + 48))
 
         # Controls help
-        help_text = "T: TC | B: Barracks | F: Factory | D: Tower | G: Guard | R: Radar | P: Pause | LClick: Select | RClick: Move/Mine | ESC: Cancel"
+        help_text = "Ctrl+1-9: Set Group | 1-9: Recall | A: Attack-Move | .: Idle Worker | Tab: Cycle | DblClick: Select Type"
         surface.blit(self.small_font.render(help_text, True, (120, 120, 120)),
                      (15, settings.MAP_HEIGHT + HUD_HEIGHT - 22))
 
