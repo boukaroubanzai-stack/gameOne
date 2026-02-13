@@ -1030,17 +1030,17 @@ def main():
             # Opponent is state.units/buildings/mineral_nodes — draw with fog filter
             for node in state.mineral_nodes:
                 if visible_rect.collidepoint(node.x, node.y) and \
-                   (not _fog_active or _is_visible_to_team(node.x, node.y, my_units, my_buildings)):
+                   (_is_visible_to_team(node.x, node.y, my_units, my_buildings)):
                     _draw_mineral_node_offset(screen, node, cam_x, cam_y)
             for building in state.buildings:
                 if visible_rect.colliderect(building.rect):
                     bx = building.x + building.w * 0.5
                     by = building.y + building.h * 0.5
-                    if not _fog_active or _is_visible_to_team(bx, by, my_units, my_buildings):
+                    if _is_visible_to_team(bx, by, my_units, my_buildings):
                         _draw_building_offset(screen, building, cam_x, cam_y)
             for unit in state.units:
                 if visible_rect.collidepoint(int(unit.x), int(unit.y)) and \
-                   (not _fog_active or _is_visible_to_team(unit.x, unit.y, my_units, my_buildings)):
+                   (_is_visible_to_team(unit.x, unit.y, my_units, my_buildings)):
                     _draw_unit_offset(screen, unit, cam_x, cam_y)
                 if unit.attacking and unit.target_enemy:
                     _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
@@ -1062,22 +1062,21 @@ def main():
         # Draw particles and damage numbers (with camera offset)
         particle_mgr.draw(screen, cam_x, cam_y)
 
-        # Fog of war dark overlay (skip when shared vision is active)
-        if _fog_active:
-            fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
-            fog_surf.fill((0, 0, 0, 140))
-            for u in my_units:
-                vr = u.vision_range
-                if vr > 0:
-                    sx = int(u.x) - cam_x
-                    sy = int(u.y) - cam_y
-                    pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
-            for b in my_buildings:
-                vr = _get_building_vision(b)
-                bx = int(b.x + b.w * 0.5) - cam_x
-                by = int(b.y + b.h * 0.5) - cam_y
-                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
-            screen.blit(fog_surf, (0, 0))
+        # Fog of war dark overlay
+        fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+        fog_surf.fill((0, 0, 0, 140))
+        for u in my_units:
+            vr = u.vision_range
+            if vr > 0:
+                sx = int(u.x) - cam_x
+                sy = int(u.y) - cam_y
+                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
+        for b in my_buildings:
+            vr = _get_building_vision(b)
+            bx = int(b.x + b.w * 0.5) - cam_x
+            by = int(b.y + b.h * 0.5) - cam_y
+            pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
+        screen.blit(fog_surf, (0, 0))
 
         # Draw placement zones when in placement mode
         if state.placement_mode:
@@ -1197,10 +1196,7 @@ def main():
 
         # Draw minimap (fixed screen position, pass camera position)
         has_radar = any(isinstance(b, Radar) for b in my_buildings)
-        if _fog_active:
-            fog_fn = lambda ex, ey: _is_visible_to_team(ex, ey, my_units, my_buildings)
-        else:
-            fog_fn = None
+        fog_fn = lambda ex, ey: _is_visible_to_team(ex, ey, my_units, my_buildings)
         minimap.draw(screen, state, camera_x, camera_y,
                      local_team=local_team, fog_visible_fn=fog_fn, has_radar=has_radar)
 
