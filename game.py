@@ -289,8 +289,17 @@ def main():
     player_ai = PlayerAI() if playforme else None
 
     # Camera position (top-left corner of the viewport in world coords)
-    camera_x = 0.0
-    camera_y = 0.0
+    # Center viewport on the local player's town center
+    if local_team == "player":
+        tc = state.buildings[0] if state.buildings else None
+    else:
+        tc = state.ai_player.buildings[0] if state.ai_player.buildings else None
+    if tc:
+        camera_x = float(max(0, min(tc.x + tc.w // 2 - WIDTH // 2, WORLD_W - WIDTH)))
+        camera_y = float(max(0, min(tc.y + tc.h // 2 - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT)))
+    else:
+        camera_x = 0.0
+        camera_y = 0.0
 
     dragging = False
     drag_start = None       # screen coords of drag start
