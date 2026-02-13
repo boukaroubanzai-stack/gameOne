@@ -71,7 +71,9 @@ class Building:
         if self.production_timer >= train_time:
             self.production_queue.pop(0)
             self.production_timer = 0.0
-            return unit_class(self.rally_x, self.rally_y)
+            unit = unit_class(self.x + self.w // 2, self.y + self.h // 2)
+            unit.set_target((self.rally_x, self.rally_y))
+            return unit
         return None
 
     @property

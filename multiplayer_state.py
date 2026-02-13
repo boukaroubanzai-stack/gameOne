@@ -176,7 +176,15 @@ class RemotePlayer:
                         unit.x, unit.y = nx, ny
                         return
 
-    def update(self, dt, player_units, player_buildings, all_units_for_collision):
+    def think(self, dt, player_units, player_buildings):
+        """No-op: remote player decisions come from network commands."""
+        pass
+
+    def drain_commands(self):
+        """No-op: remote player has no local commands."""
+        return []
+
+    def update_simulation(self, dt, player_units, player_buildings, all_units_for_collision):
         """Update remote player entities: production, combat, cleanup. No AI decisions."""
         self._ensure_tinted_sprites()
         self._handle_deploying_workers(dt)

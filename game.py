@@ -11,7 +11,7 @@ from settings import (
     WORLD_W, WORLD_H, SCROLL_SPEED, SCROLL_EDGE,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
-from utils import get_font, hp_bar_color, get_range_circle
+from utils import get_font, hp_bar_color, get_range_circle, tint_surface
 from particles import ParticleManager
 from game_state import GameState
 from hud import HUD
@@ -334,10 +334,10 @@ def main():
     chat_input_active = False
     chat_input_text = ""
 
-    # Pre-import for multiplayer (avoid re-importing every frame)
+    # Pre-import commands (used for both AI and multiplayer command execution)
+    from commands import execute_command
     if net_session:
         import time as _time
-        from commands import execute_command
         # Input delay: tick 0 has no remote commands (they arrive one tick ahead)
         net_session.remote_tick_ready = True
         net_session.remote_commands = []
@@ -447,6 +447,17 @@ def main():
                     scroll_up = True
                 elif event.key == pygame.K_DOWN:
                     scroll_down = True
+                elif event.key == pygame.K_s:
+                    if audio.music_playing:
+                        audio.stop_music()
+                        floating_texts.append(FloatingText(
+                            camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
+                            "Music OFF", (200, 200, 200)))
+                    else:
+                        audio.play_music()
+                        floating_texts.append(FloatingText(
+                            camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
+                            "Music ON", (200, 200, 200)))
 
                 # --- QOL: Control groups (Ctrl+1-9 assign, 1-9 recall) ---
                 elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
@@ -917,9 +928,23 @@ def main():
 
             # Only advance simulation when not waiting for remote peer
             if not net_waiting:
-                state.update(sim_dt)
+                # AI think phase: generate commands (single-player only)
+                if not net_session:
+                    state.ai_player.think(sim_dt, state.units, state.buildings)
+                    for cmd in state.ai_player.drain_commands():
+                        execute_command(cmd, state, "ai")
+
+                # PlayerAI think phase: generate commands (--playforme only)
                 if player_ai is not None:
-                    player_ai.update(sim_dt, state, state.wave_manager.enemies, state.ai_player)
+                    player_ai.think(sim_dt, state, state.wave_manager.enemies, state.ai_player)
+                    for cmd in player_ai.drain_commands():
+                        execute_command(cmd, state, "player")
+
+                state.update(sim_dt)
+
+                # Post-simulation: focus fire adjustment (--playforme only)
+                if player_ai is not None:
+                    player_ai.apply_focus_fire(state)
                 all_units_for_disaster = state.units + state.wave_manager.enemies + state.ai_player.units
                 all_buildings_for_disaster = state.buildings + state.ai_player.buildings
                 disaster_mgr.update(sim_dt, all_units_for_disaster, all_buildings_for_disaster)
@@ -1027,7 +1052,7 @@ def main():
             _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect,
                                    fog_units=my_units, fog_buildings=my_buildings)
         else:
-            # Opponent is state.units/buildings/mineral_nodes — draw with fog filter
+            # Opponent is state.units/buildings/mineral_nodes — draw with fog filter + orange tint
             for node in state.mineral_nodes:
                 if visible_rect.collidepoint(node.x, node.y) and \
                    (_is_visible_to_team(node.x, node.y, my_units, my_buildings)):
@@ -1037,16 +1062,45 @@ def main():
                     bx = building.x + building.w * 0.5
                     by = building.y + building.h * 0.5
                     if _is_visible_to_team(bx, by, my_units, my_buildings):
-                        _draw_building_offset(screen, building, cam_x, cam_y)
+                        ox = building.x - cam_x
+                        oy = building.y - cam_y
+                        tinted = _get_opponent_tinted(building.sprite) if building.sprite else None
+                        if tinted:
+                            screen.blit(tinted, (ox, oy))
+                        else:
+                            _draw_building_offset(screen, building, cam_x, cam_y)
+                            continue
+                        _draw_health_bar(screen, ox, oy - 8, building.w, 4,
+                                         building.hp, building.max_hp)
+                        label = get_font(18).render(building.label, True, (255, 180, 100))
+                        label_rect = label.get_rect(center=(ox + building.w // 2, oy - 16))
+                        screen.blit(label, label_rect)
+                        if building.production_queue:
+                            prog_y = oy + building.h + 2
+                            pygame.draw.rect(screen, (60, 60, 60),
+                                             (ox, prog_y, building.w, 4))
+                            prog = building.production_progress
+                            pygame.draw.rect(screen, (0, 180, 255),
+                                             (ox, prog_y, int(building.w * prog), 4))
             for unit in state.units:
                 if visible_rect.collidepoint(int(unit.x), int(unit.y)) and \
                    (_is_visible_to_team(unit.x, unit.y, my_units, my_buildings)):
-                    _draw_unit_offset(screen, unit, cam_x, cam_y)
+                    sx = int(unit.x) - cam_x
+                    sy = int(unit.y) - cam_y
+                    tinted = _get_opponent_tinted(unit.sprite) if unit.sprite else None
+                    if tinted:
+                        r = tinted.get_rect(center=(sx, sy))
+                        screen.blit(tinted, r)
+                    else:
+                        _draw_unit_offset(screen, unit, cam_x, cam_y)
+                        continue
+                    _draw_health_bar(screen, sx - unit.size, sy - unit.size - 6,
+                                     unit.size * 2, 3, unit.hp, unit.max_hp)
+                    if isinstance(unit, Worker):
+                        _draw_worker_extras(screen, unit, sx, sy)
                 if unit.attacking and unit.target_enemy:
                     _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
-                                      unit.target_enemy, cam_x, cam_y, (255, 255, 0))
-            # Draw own team (ai_player) with tinted sprites, always visible
-            _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect)
+                                      unit.target_enemy, cam_x, cam_y, (255, 140, 0))
 
         # Draw enemies (with camera offset)
         for enemy in state.wave_manager.enemies:
@@ -1407,6 +1461,16 @@ def _draw_mineral_node_offset(surface, node, cam_x, cam_y):
     label = font.render(str(node.remaining), True, (255, 255, 255))
     label_rect = label.get_rect(center=(cx, cy + s + 10))
     surface.blit(label, label_rect)
+
+
+_opponent_tint_cache = {}
+
+def _get_opponent_tinted(sprite):
+    """Return orange-tinted version of a sprite, cached by sprite id."""
+    key = id(sprite)
+    if key not in _opponent_tint_cache:
+        _opponent_tint_cache[key] = tint_surface(sprite, (255, 200, 160))
+    return _opponent_tint_cache[key]
 
 
 def _draw_building_offset(surface, building, cam_x, cam_y):

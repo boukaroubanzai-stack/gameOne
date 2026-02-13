@@ -102,6 +102,31 @@ def execute_command(cmd, game_state, team):
         return
 
 
+    elif cmd_type == "attack":
+        target_id = cmd["target_id"]
+        target_type = cmd.get("target_type", "unit")
+        # Find target in the opposing team
+        if team == "ai":
+            opp_units = game_state.units
+            opp_buildings = game_state.buildings
+        else:
+            opp_units = game_state.ai_player.units
+            opp_buildings = game_state.ai_player.buildings
+        if target_type == "building":
+            target = _find_building(opp_buildings, target_id)
+        else:
+            target = _find_unit(opp_units, target_id)
+        if target:
+            for uid in cmd["unit_ids"]:
+                unit = _find_unit(units, uid)
+                if unit:
+                    if hasattr(target, 'size'):
+                        unit.set_target((target.x, target.y))
+                    else:
+                        unit.set_target((target.x + target.w // 2, target.y + target.h // 2))
+                    unit.target_enemy = target
+                    unit.attacking = True
+
     elif cmd_type == "repair":
         target_type = cmd["target_type"]
         target_id = cmd["target_id"]

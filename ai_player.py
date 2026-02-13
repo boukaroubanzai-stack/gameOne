@@ -38,6 +38,14 @@ AI_RESOURCE_RESERVE = 100  # keep some resources for emergency replacements
 
 from utils import tint_surface, get_font
 
+BUILDING_TYPE_MAP = {
+    Barracks: "barracks",
+    Factory: "factory",
+    TownCenter: "towncenter",
+    DefenseTower: "tower",
+    Radar: "radar",
+}
+
 
 class AIPlayer:
     """Computer-controlled opponent that builds a base, trains units, and attacks."""
@@ -91,6 +99,10 @@ class AIPlayer:
         self._tinted_sprites = {}
         self._game_state = None  # set by GameState after init for net_id assignment
 
+        # Command queue: AI generates commands instead of directly mutating state
+        self.pending_commands = []
+        self._committed_resources = 0
+
         self._setup()
 
     def _setup(self):
@@ -110,6 +122,21 @@ class AIPlayer:
             w = Worker(tc.rally_x + i * 25, tc.rally_y)
             w.team = "ai"
             self.units.append(w)
+
+    def _queue_command(self, cmd):
+        self.pending_commands.append(cmd)
+
+    def drain_commands(self):
+        cmds = self.pending_commands
+        self.pending_commands = []
+        self._committed_resources = 0
+        return cmds
+
+    def _can_afford(self, cost):
+        return self.resource_manager.amount - self._committed_resources >= cost
+
+    def _commit_resources(self, cost):
+        self._committed_resources += cost
 
     def _ensure_tinted_sprites(self):
         """Create tinted versions of sprites for AI units/buildings."""
@@ -255,13 +282,14 @@ class AIPlayer:
                 if unit.state == "idle":
                     node = self._find_best_mineral_node_for_worker(unit)
                     if node:
-                        unit.assign_to_mine(node, self.buildings, self.resource_manager)
+                        node_idx = self.mineral_nodes.index(node)
+                        self._queue_command({"cmd": "mine", "unit_ids": [unit.net_id], "node_index": node_idx})
                 elif unit.state == "waiting":
                     # Worker stuck waiting — reassign to a different node
                     node = self._find_best_mineral_node_for_worker(unit)
                     if node and node is not unit.assigned_node:
-                        unit.cancel_mining()
-                        unit.assign_to_mine(node, self.buildings, self.resource_manager)
+                        node_idx = self.mineral_nodes.index(node)
+                        self._queue_command({"cmd": "mine", "unit_ids": [unit.net_id], "node_index": node_idx})
 
     # --- Building placement ---
 
@@ -320,7 +348,7 @@ class AIPlayer:
 
     def _try_place_building(self, building_class, cost, size):
         """Attempt to place a building by sending a worker to deploy it."""
-        if not self.resource_manager.can_afford(cost):
+        if not self._can_afford(cost):
             return False
         available_workers = self._find_available_worker()
         if not available_workers:
@@ -328,10 +356,16 @@ class AIPlayer:
         pos = self._find_building_placement(size)
         if pos is None:
             return False
-        self.resource_manager.spend(cost)
+        self._commit_resources(cost)
         closest = min(available_workers, key=lambda w: math.hypot(w.x - pos[0], w.y - pos[1]))
-        closest.cancel_mining()
-        closest.assign_to_deploy(building_class, pos, cost)
+        building_type = BUILDING_TYPE_MAP.get(building_class)
+        if building_type:
+            self._queue_command({
+                "cmd": "place_building",
+                "building_type": building_type,
+                "x": pos[0], "y": pos[1],
+                "worker_id": closest.net_id,
+            })
         return True
 
     def _place_tower_near_building(self):
@@ -375,18 +409,24 @@ class AIPlayer:
                             overlap = True
                             break
                 if not overlap:
-                    if self.resource_manager.spend(TOWER_COST):
+                    if self._can_afford(TOWER_COST):
+                        self._commit_resources(TOWER_COST)
                         closest = min(available_workers, key=lambda w: math.hypot(w.x - x, w.y - y))
-                        closest.cancel_mining()
-                        closest.assign_to_deploy(DefenseTower, (x, y), TOWER_COST)
+                        self._queue_command({
+                            "cmd": "place_building",
+                            "building_type": "tower",
+                            "x": x, "y": y,
+                            "worker_id": closest.net_id,
+                        })
                         return True
             return False
 
     def _try_train_unit(self, building, resource_mgr):
         """Train a unit from a building if affordable."""
         unit_class, cost, train_time = building.can_train()
-        if resource_mgr.spend(cost):
-            building.production_queue.append((unit_class, train_time))
+        if self._can_afford(cost):
+            self._commit_resources(cost)
+            self._queue_command({"cmd": "train_unit", "building_id": building.net_id})
             return True
         return False
 
@@ -464,12 +504,12 @@ class AIPlayer:
                     break
                 # Only queue if production queue is not full
                 if len(tc.production_queue) < 2:
-                    if self.resource_manager.can_afford(WORKER_COST):
+                    if self._can_afford(WORKER_COST):
                         self._try_train_unit(tc, self.resource_manager)
                         num_workers += 1  # account for queued
 
         # Build additional Town Center for faster worker production when rich
-        if resources > TOWN_CENTER_COST + 200 and num_town_centers < 2 and num_workers >= 4:
+        if self._can_afford(TOWN_CENTER_COST + 200) and num_town_centers < 2 and num_workers >= 4:
             self._try_place_building(TownCenter, TOWN_CENTER_COST, TOWN_CENTER_SIZE)
 
     def _manage_buildings(self, num_barracks, num_factories, num_town_centers, num_combat, resources):
@@ -480,15 +520,15 @@ class AIPlayer:
             return
 
         # Build second Barracks before Factory (soldiers are cheaper and faster)
-        if num_barracks < 2 and resources >= BARRACKS_COST + self.resource_reserve:
+        if num_barracks < 2 and self._can_afford(BARRACKS_COST + self.resource_reserve):
             self._try_place_building(Barracks, BARRACKS_COST, BARRACKS_SIZE)
 
         # Build first Factory after 2 Barracks
-        if num_barracks >= 2 and num_factories == 0 and resources >= FACTORY_COST + self.resource_reserve:
+        if num_barracks >= 2 and num_factories == 0 and self._can_afford(FACTORY_COST + self.resource_reserve):
             self._try_place_building(Factory, FACTORY_COST, FACTORY_SIZE)
 
         # Expand production when queues are full and resources are high
-        if resources > 400:
+        if self._can_afford(400):
             all_barracks = self._get_all_buildings_of_type(Barracks)
             all_queues_full = all(len(b.production_queue) >= 2 for b in all_barracks) if all_barracks else True
             if all_queues_full and num_barracks < 4:
@@ -502,17 +542,17 @@ class AIPlayer:
         # Build Radar for extended vision (one is enough)
         if self.build_radar and num_barracks >= 1:
             num_radars = self._count_buildings_of_type(Radar)
-            if num_radars == 0 and resources >= RADAR_COST + self.resource_reserve:
+            if num_radars == 0 and self._can_afford(RADAR_COST + self.resource_reserve):
                 self._try_place_building(Radar, RADAR_COST, RADAR_SIZE)
 
         # Build defense towers near existing buildings
         if self.build_towers and num_barracks >= 1:
             num_towers = self._count_buildings_of_type(DefenseTower)
-            if num_towers < self.max_towers and resources >= TOWER_COST + self.resource_reserve:
+            if num_towers < self.max_towers and self._can_afford(TOWER_COST + self.resource_reserve):
                 self._place_tower_near_building()
 
         # Rebuild destroyed buildings (defensive behavior)
-        if self._buildings_lost_recently > 0 and resources >= BARRACKS_COST:
+        if self._buildings_lost_recently > 0 and self._can_afford(BARRACKS_COST):
             if num_barracks == 0:
                 if self._try_place_building(Barracks, BARRACKS_COST, BARRACKS_SIZE):
                     self._buildings_lost_recently = max(0, self._buildings_lost_recently - 1)
@@ -546,14 +586,13 @@ class AIPlayer:
                     and total_infantry > 0
                     and num_scouts / max(total_infantry, 1) < self.scout_ratio
                 )
-                if should_train_scout and resources > SCOUT_COST + reserve:
-                    if barracks.start_production_scout(self.resource_manager):
-                        resources = self.resource_manager.amount
-                        num_scouts += 1
+                if should_train_scout and self._can_afford(SCOUT_COST + reserve):
+                    self._commit_resources(SCOUT_COST)
+                    self._queue_command({"cmd": "train_scout", "building_id": barracks.net_id})
+                    num_scouts += 1
                 elif need_soldiers or num_tanks > 0:
-                    if resources > SOLDIER_COST + reserve:
-                        if self._try_train_unit(barracks, self.resource_manager):
-                            resources = self.resource_manager.amount
+                    if self._can_afford(SOLDIER_COST + reserve):
+                        self._try_train_unit(barracks, self.resource_manager)
 
         # Train tanks from all factories (less aggressively to maintain ratio)
         all_factories = self._get_all_buildings_of_type(Factory)
@@ -561,15 +600,14 @@ class AIPlayer:
             if len(factory.production_queue) < 2:
                 # Only train tanks if we have enough soldiers to maintain ratio
                 if num_soldiers >= self.soldier_ratio or num_tanks == 0:
-                    if resources > TANK_COST + reserve:
-                        if self._try_train_unit(factory, self.resource_manager):
-                            resources = self.resource_manager.amount
+                    if self._can_afford(TANK_COST + reserve):
+                        self._try_train_unit(factory, self.resource_manager)
 
         # If resources are very high, queue even more aggressively
-        if resources > 600:
+        if self._can_afford(600):
             for barracks in all_barracks:
                 if len(barracks.production_queue) < 5:
-                    if self.resource_manager.can_afford(SOLDIER_COST):
+                    if self._can_afford(SOLDIER_COST):
                         self._try_train_unit(barracks, self.resource_manager)
 
     def _manage_combat(self, player_units, player_buildings, num_combat, player_combat):
@@ -632,7 +670,7 @@ class AIPlayer:
                         if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units:
                             if not u.attacking and not u.waypoints:
                                 spread = random.randint(-80, 80), random.randint(-80, 80)
-                                u.set_target((new_target[0] + spread[0], new_target[1] + spread[1]))
+                                self._queue_command({"cmd": "move", "unit_ids": [u.net_id], "x": new_target[0] + spread[0], "y": new_target[1] + spread[1]})
                 elif new_target is None:
                     # No more targets — victory, recall units
                     self.attack_sent = False
@@ -691,7 +729,7 @@ class AIPlayer:
             elif target is None:
                 target = (200, WORLD_H // 2)
 
-            scout.set_target(target)
+            self._queue_command({"cmd": "move", "unit_ids": [scout.net_id], "x": target[0], "y": target[1]})
             self._scouting_units.add(id(scout))
 
         self._scout_sent = True
@@ -729,12 +767,12 @@ class AIPlayer:
             if not unit.waypoints and not unit.attacking:
                 if self._scout_explore_targets:
                     target = self._scout_explore_targets.pop(0)
-                    unit.set_target(target)
+                    self._queue_command({"cmd": "move", "unit_ids": [unit.net_id], "x": target[0], "y": target[1]})
                 else:
                     # Done exploring, refresh targets
                     self._scout_explore_targets = self._generate_explore_targets()
                     target = self._scout_explore_targets.pop(0)
-                    unit.set_target(target)
+                    self._queue_command({"cmd": "move", "unit_ids": [unit.net_id], "x": target[0], "y": target[1]})
 
     def _launch_attack_wave(self, player_units, player_buildings, num_combat, player_combat):
         """Send an attack wave, keeping some units as garrison."""
@@ -764,7 +802,7 @@ class AIPlayer:
                 continue
             # Spread units around the target so they don't all pile on one pixel
             spread = random.randint(-80, 80), random.randint(-80, 80)
-            unit.set_target((target[0] + spread[0], target[1] + spread[1]))
+            self._queue_command({"cmd": "move", "unit_ids": [unit.net_id], "x": target[0] + spread[0], "y": target[1] + spread[1]})
             self._attacking_units.add(id(unit))
             sent += 1
 
@@ -813,19 +851,19 @@ class AIPlayer:
     def _retreat(self):
         """Pull attacking units back to base."""
         base = self._get_base_center()
-        for unit in self.units:
-            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive and id(unit) in self._attacking_units:
-                unit.target_enemy = None
-                unit.attacking = False
-                unit.set_target(base)
-
+        retreat_ids = [
+            u.net_id for u in self.units
+            if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units
+        ]
+        if retreat_ids:
+            self._queue_command({"cmd": "move", "unit_ids": retreat_ids, "x": base[0], "y": base[1]})
+        # Reset state
         self.attack_sent = False
         self._attacking_units.clear()
         self._scout_sent = False
         self._enemy_base_location = None
         self._scouting_units.clear()
         self._scouted_positions.clear()
-        # Set retreat cooldown: wait before next attack, and build a bigger force
         self._retreat_cooldown = 8.0
 
     def _check_defense(self, player_units):
@@ -841,13 +879,16 @@ class AIPlayer:
                     dist = math.hypot(pu.x - bx, pu.y - by)
                     if dist < 300:  # Increased detection range from 200
                         # Pull garrison units and nearby idle units to defend
+                        defend_ids = []
                         for unit in self.units:
                             if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive:
                                 is_garrison = id(unit) in self._garrison_units
                                 unit_to_base = math.hypot(unit.x - bx, unit.y - by)
                                 if is_garrison or unit_to_base < 400:
                                     if not unit.attacking or id(unit) in self._garrison_units:
-                                        unit.set_target((pu.x, pu.y))
+                                        defend_ids.append(unit.net_id)
+                        if defend_ids:
+                            self._queue_command({"cmd": "move", "unit_ids": defend_ids, "x": pu.x, "y": pu.y})
                         return True
         return False
 
@@ -974,23 +1015,22 @@ class AIPlayer:
             unit.deploy_build_timer = 0.0
             unit.deploy_building = False
 
-    def update(self, dt, player_units, player_buildings, all_units_for_collision):
-        """Update AI: think, produce, move units."""
+    def think(self, dt, player_units, player_buildings):
+        """Periodic strategic decision-making. Generates commands in pending_commands."""
+        self.think_timer += dt
+        if self.think_timer >= self.think_interval:
+            self.think_timer = 0.0
+            self._think(player_units, player_buildings)
+
+    def update_simulation(self, dt, player_units, player_buildings, all_units_for_collision):
+        """Update AI simulation: sprites, deploying workers, production, auto-targeting, cleanup."""
         self._ensure_tinted_sprites()
 
         # Handle deploying workers (create buildings when they arrive)
         self._handle_deploying_workers(dt)
 
-        # Periodic decision making
-        self.think_timer += dt
-        if self.think_timer >= self.think_interval:
-            self.think_timer = 0.0
-            self._think(player_units, player_buildings)
-            # Apply focus fire after thinking
-            self._apply_focus_fire(player_units, player_buildings)
-        elif self.focus_fire_always:
-            # Hard AI: apply focus fire every frame for better micro
-            self._apply_focus_fire(player_units, player_buildings)
+        # Apply focus fire after thinking
+        self._apply_focus_fire(player_units, player_buildings)
 
         # Update building production and tower combat
         for building in self.buildings:
@@ -1108,6 +1148,15 @@ class AIPlayer:
 
         # Remove dead AI buildings
         self.buildings = [b for b in self.buildings if b.hp > 0]
+
+    def update(self, dt, player_units, player_buildings, all_units_for_collision):
+        """Update AI: think, execute commands, simulate. Backward-compatible wrapper."""
+        from commands import execute_command
+        self.think(dt, player_units, player_buildings)
+        cmds = self.drain_commands()
+        for cmd in cmds:
+            execute_command(cmd, self._game_state, "ai")
+        self.update_simulation(dt, player_units, player_buildings, all_units_for_collision)
 
     def draw(self, surface):
         """Draw all AI buildings and units with orange tint."""

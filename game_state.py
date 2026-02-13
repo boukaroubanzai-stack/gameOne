@@ -717,8 +717,8 @@ class GameState:
             if b.hp <= 0:
                 self.pending_deaths.append((b.x + b.w // 2, b.y + b.h // 2, b.team, "building"))
 
-        # Update AI player
-        self.ai_player.update(dt, self.units, self.buildings, self._cached_all_units)
+        # Update AI player (simulation only — think() is called by game.py)
+        self.ai_player.update_simulation(dt, self.units, self.buildings, self._cached_all_units)
 
         # Remove dead player units
         dead_units = [u for u in self.units if not u.alive]

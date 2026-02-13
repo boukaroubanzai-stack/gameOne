@@ -22,9 +22,17 @@ GARRISON_RATIO = 0.3  # keep 30% of army at base for defense
 RETREAT_RATIO = 0.3  # retreat when army is < 30% of enemy force
 RESOURCE_RESERVE = 100  # keep some resources for emergency replacements
 
+# Building class to command string mapping
+BUILDING_TYPE_MAP = {
+    Barracks: "barracks",
+    Factory: "factory",
+    TownCenter: "towncenter",
+    DefenseTower: "tower",
+}
+
 
 class PlayerAI:
-    """AI controller for the player side. Reads/writes state entities directly."""
+    """AI controller for the player side. Emits command dicts instead of mutating state directly."""
 
     def __init__(self):
         self.think_timer = 0.0
@@ -42,6 +50,27 @@ class PlayerAI:
         self._retreat_cooldown = 0.0
         self._buildings_lost_recently = 0
         self._last_building_count = 0
+
+        # Command queue
+        self.pending_commands = []
+        self._committed_resources = 0
+
+    # --- Command helpers ---
+
+    def _queue_command(self, cmd):
+        self.pending_commands.append(cmd)
+
+    def drain_commands(self):
+        cmds = self.pending_commands
+        self.pending_commands = []
+        self._committed_resources = 0
+        return cmds
+
+    def _can_afford(self, state, cost):
+        return state.resource_manager.amount - self._committed_resources >= cost
+
+    def _commit_resources(self, cost):
+        self._committed_resources += cost
 
     # --- Helpers ---
 
@@ -121,13 +150,14 @@ class PlayerAI:
                 if unit.state == "idle":
                     node = self._find_best_mineral_node(state, unit)
                     if node:
-                        unit.assign_to_mine(node, state.buildings, state.resource_manager)
+                        node_idx = state.mineral_nodes.index(node)
+                        self._queue_command({"cmd": "mine", "unit_ids": [unit.net_id], "node_index": node_idx})
                 elif unit.state == "waiting":
                     # Worker stuck waiting — reassign to a different node
                     node = self._find_best_mineral_node(state, unit)
                     if node and node is not unit.assigned_node:
-                        unit.cancel_mining()
-                        unit.assign_to_mine(node, state.buildings, state.resource_manager)
+                        node_idx = state.mineral_nodes.index(node)
+                        self._queue_command({"cmd": "mine", "unit_ids": [unit.net_id], "node_index": node_idx})
 
     # --- Building placement ---
 
@@ -185,9 +215,8 @@ class PlayerAI:
 
     def _try_place_building(self, state, building_class, cost, size):
         """Place a building by sending an idle worker to deploy it."""
-        if not state.resource_manager.can_afford(cost):
+        if not self._can_afford(state, cost):
             return False
-        # Find an idle worker
         idle_workers = [u for u in state.units
                         if isinstance(u, Worker) and u.alive and u.state == "idle"]
         if not idle_workers:
@@ -195,15 +224,23 @@ class PlayerAI:
         pos = self._find_building_placement(state, size)
         if pos is None:
             return False
-        state.resource_manager.spend(cost)
+        self._commit_resources(cost)
         closest = min(idle_workers, key=lambda w: math.hypot(w.x - pos[0], w.y - pos[1]))
-        closest.assign_to_deploy(building_class, pos, cost)
+        building_type = BUILDING_TYPE_MAP.get(building_class)
+        if building_type:
+            self._queue_command({
+                "cmd": "place_building",
+                "building_type": building_type,
+                "x": pos[0], "y": pos[1],
+                "worker_id": closest.net_id,
+            })
         return True
 
-    def _try_train_unit(self, building, resource_mgr):
+    def _try_train_unit(self, building, state):
         unit_class, cost, train_time = building.can_train()
-        if resource_mgr.spend(cost):
-            building.production_queue.append((unit_class, train_time))
+        if self._can_afford(state, cost):
+            self._commit_resources(cost)
+            self._queue_command({"cmd": "train_unit", "building_id": building.net_id})
             return True
         return False
 
@@ -236,6 +273,7 @@ class PlayerAI:
         self._manage_buildings(state, num_barracks, num_factories, num_town_centers, num_combat, resources)
         self._manage_military(state, num_soldiers, num_tanks, num_barracks, num_factories, resources)
         self._manage_combat(state, enemies, ai_player, num_combat, enemy_combat)
+        self._resend_idle_attackers(state)
 
     def _update_phase(self, num_workers, num_combat, enemy_combat):
         if self._buildings_lost_recently > 0:
@@ -259,8 +297,8 @@ class PlayerAI:
                 if num_workers >= desired_workers:
                     break
                 if len(tc.production_queue) < 2:
-                    if state.resource_manager.can_afford(WORKER_COST):
-                        self._try_train_unit(tc, state.resource_manager)
+                    if self._can_afford(state, WORKER_COST):
+                        self._try_train_unit(tc, state)
                         num_workers += 1
 
         if resources > TOWN_CENTER_COST + 200 and num_town_centers < 2 and num_workers >= 4:
@@ -273,11 +311,11 @@ class PlayerAI:
             return
 
         # Second Barracks before Factory
-        if num_barracks < 2 and resources >= BARRACKS_COST + RESOURCE_RESERVE:
+        if num_barracks < 2 and self._can_afford(state, BARRACKS_COST + RESOURCE_RESERVE):
             self._try_place_building(state, Barracks, BARRACKS_COST, BARRACKS_SIZE)
 
         # First Factory after 2 Barracks
-        if num_barracks >= 2 and num_factories == 0 and resources >= FACTORY_COST + RESOURCE_RESERVE:
+        if num_barracks >= 2 and num_factories == 0 and self._can_afford(state, FACTORY_COST + RESOURCE_RESERVE):
             self._try_place_building(state, Factory, FACTORY_COST, FACTORY_SIZE)
 
         # Expand production when rich and queues full
@@ -299,7 +337,7 @@ class PlayerAI:
                 self._try_place_building(state, DefenseTower, TOWER_COST, TOWER_SIZE)
 
         # Rebuild destroyed buildings
-        if self._buildings_lost_recently > 0 and resources >= BARRACKS_COST:
+        if self._buildings_lost_recently > 0 and self._can_afford(state, BARRACKS_COST):
             if num_barracks == 0:
                 if self._try_place_building(state, Barracks, BARRACKS_COST, BARRACKS_SIZE):
                     self._buildings_lost_recently = max(0, self._buildings_lost_recently - 1)
@@ -322,7 +360,7 @@ class PlayerAI:
             if len(barracks.production_queue) < 3:
                 if need_soldiers or num_tanks > 0:
                     if resources > SOLDIER_COST + reserve:
-                        if self._try_train_unit(barracks, state.resource_manager):
+                        if self._try_train_unit(barracks, state):
                             resources = state.resource_manager.amount
 
         all_factories = self._get_buildings_of_type(state, Factory)
@@ -330,15 +368,15 @@ class PlayerAI:
             if len(factory.production_queue) < 2:
                 if num_soldiers >= SOLDIER_RATIO or num_tanks == 0:
                     if resources > TANK_COST + reserve:
-                        if self._try_train_unit(factory, state.resource_manager):
+                        if self._try_train_unit(factory, state):
                             resources = state.resource_manager.amount
 
         # Aggressive queuing when rich
         if resources > 600:
             for barracks in all_barracks:
                 if len(barracks.production_queue) < 5:
-                    if state.resource_manager.can_afford(SOLDIER_COST):
-                        self._try_train_unit(barracks, state.resource_manager)
+                    if self._can_afford(state, SOLDIER_COST):
+                        self._try_train_unit(barracks, state)
 
     # --- Combat ---
 
@@ -388,7 +426,9 @@ class PlayerAI:
                         if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units:
                             if not u.attacking and not u.waypoints:
                                 spread = random.randint(-80, 80), random.randint(-80, 80)
-                                u.set_target((new_target[0] + spread[0], new_target[1] + spread[1]))
+                                self._queue_command({"cmd": "move", "unit_ids": [u.net_id],
+                                                     "x": new_target[0] + spread[0],
+                                                     "y": new_target[1] + spread[1]})
                 elif new_target is None:
                     self.attack_sent = False
                     self._attacking_units.clear()
@@ -405,7 +445,7 @@ class PlayerAI:
                     if target is None:
                         # Scout toward the right (AI base side)
                         target = (WORLD_W - 200, WORLD_H // 2)
-                    unit.set_target(target)
+                    self._queue_command({"cmd": "move", "unit_ids": [unit.net_id], "x": target[0], "y": target[1]})
                     self._scout_sent = True
                     self._scout_unit_id = id(unit)
                     self._enemy_base_location = target
@@ -433,7 +473,8 @@ class PlayerAI:
                 sent += 1
                 continue
             spread = random.randint(-80, 80), random.randint(-80, 80)
-            unit.set_target((target[0] + spread[0], target[1] + spread[1]))
+            self._queue_command({"cmd": "move", "unit_ids": [unit.net_id],
+                                 "x": target[0] + spread[0], "y": target[1] + spread[1]})
             self._attacking_units.add(id(unit))
             sent += 1
 
@@ -474,12 +515,12 @@ class PlayerAI:
 
     def _retreat(self, state):
         base = self._get_base_center(state)
-        for unit in state.units:
-            if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive and id(unit) in self._attacking_units:
-                unit.target_enemy = None
-                unit.attacking = False
-                unit.set_target(base)
-
+        retreat_ids = [
+            u.net_id for u in state.units
+            if isinstance(u, (Soldier, Scout, Tank)) and u.alive and id(u) in self._attacking_units
+        ]
+        if retreat_ids:
+            self._queue_command({"cmd": "move", "unit_ids": retreat_ids, "x": base[0], "y": base[1]})
         self.attack_sent = False
         self._attacking_units.clear()
         self._scout_sent = False
@@ -495,17 +536,20 @@ class PlayerAI:
                     bx, by = b.x + b.w // 2, b.y + b.h // 2
                     dist = math.hypot(hu.x - bx, hu.y - by)
                     if dist < 300:
+                        defend_ids = []
                         for unit in state.units:
                             if isinstance(unit, (Soldier, Scout, Tank)) and unit.alive:
                                 is_garrison = id(unit) in self._garrison_units
                                 unit_to_base = math.hypot(unit.x - bx, unit.y - by)
                                 if is_garrison or unit_to_base < 400:
                                     if not unit.attacking or id(unit) in self._garrison_units:
-                                        unit.set_target((hu.x, hu.y))
+                                        defend_ids.append(unit.net_id)
+                        if defend_ids:
+                            self._queue_command({"cmd": "move", "unit_ids": defend_ids, "x": hu.x, "y": hu.y})
                         return True
         return False
 
-    def _apply_focus_fire(self, state):
+    def apply_focus_fire(self, state):
         """Make attacking combat units focus the same target."""
         best_target = None
         lowest_hp = float("inf")
@@ -556,24 +600,25 @@ class PlayerAI:
                     dist = math.hypot(unit.x - self.attack_target[0], unit.y - self.attack_target[1])
                     if dist > unit.attack_range:
                         spread = random.randint(-80, 80), random.randint(-80, 80)
-                        unit.set_target((self.attack_target[0] + spread[0], self.attack_target[1] + spread[1]))
+                        self._queue_command({"cmd": "move", "unit_ids": [unit.net_id],
+                                            "x": self.attack_target[0] + spread[0],
+                                            "y": self.attack_target[1] + spread[1]})
                 elif id(unit) not in self._garrison_units:
                     # Newly spawned combat unit — reinforce ongoing attack
                     self._attacking_units.add(id(unit))
                     spread = random.randint(-80, 80), random.randint(-80, 80)
-                    unit.set_target((self.attack_target[0] + spread[0], self.attack_target[1] + spread[1]))
+                    self._queue_command({"cmd": "move", "unit_ids": [unit.net_id],
+                                        "x": self.attack_target[0] + spread[0],
+                                        "y": self.attack_target[1] + spread[1]})
 
-    # --- Main update ---
+    # --- Main entry points ---
 
-    def update(self, dt, state, enemies, ai_player):
-        """Called each frame from the game loop."""
+    def think(self, dt, state, enemies, ai_player):
+        """Called each frame from the game loop. Generates commands."""
         self.think_timer += dt
         if self.think_timer >= THINK_INTERVAL:
             self.think_timer = 0.0
             self._think(state, enemies, ai_player)
-            self._apply_focus_fire(state)
-            self._resend_idle_attackers(state)
-
         # Clean up stale IDs from tracking sets
         alive_ids = {id(u) for u in state.units if u.alive}
         self._attacking_units &= alive_ids

@@ -163,7 +163,7 @@ WATCHGUARD_SPRITE = os.path.join(ASSETS_DIR, "watchguard.png")
 RADAR_COST = 400
 RADAR_SIZE = (64, 64)
 RADAR_HP = 500
-RADAR_BUILD_TIME = 8.0
+RADAR_BUILD_TIME = 16.0
 RADAR_VISION = 2000  # vision range in pixels
 RADAR_SPRITE = os.path.join(ASSETS_DIR, "radar.png")
 

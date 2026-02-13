@@ -133,6 +133,7 @@ controls:
 -G: enter watchguard placement mode.
 -Right click on damaged friendly unit/building: send selected workers to repair.
 -Right click: cancel building placement mode.
+-S: toggle background music on/off. displays a floating "Music ON" or "Music OFF" message.
 -P: pause the game and generate a dbug.log file with the full game state. press ESC to resume.
 -Left click: place building, select unit or building, click minimap to move viewport.
 -Left drag: box-select units, drag on minimap to pan camera.
