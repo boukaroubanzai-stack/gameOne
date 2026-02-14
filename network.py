@@ -162,6 +162,8 @@ class NetworkHost:
         self.port = port
         self.sock = None
         self.connection = None
+        self.spectator_connection = None
+        self._spectator_sock = None  # separate socket for spectator on port+1
         self.upnp_mapped = False
         self._upnp = None
 
@@ -172,14 +174,43 @@ class NetworkHost:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("", self.port))
         self.sock.setblocking(False)
+        # Separate socket for spectator connections on port+1
+        self._spectator_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._spectator_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._spectator_sock.bind(("", self.port + 1))
+        self._spectator_sock.setblocking(False)
         print(f"Hosting on port {self.port}... Waiting for peer to connect.")
+        print(f"Spectator port: {self.port + 1}")
         if self.upnp_mapped:
             print("UPnP port mapping active. Share your external IP.")
         else:
             print(f"UPnP failed or unavailable. You may need to forward port {self.port} manually.")
 
     def accept(self):
-        """Non-blocking: wait for first datagram from a peer."""
+        """Non-blocking: wait for first datagram from a peer on main socket.
+        Also checks the spectator socket for spectator connections."""
+        # Check for spectator connections on spectator socket (port+1)
+        if not self.spectator_connection and self._spectator_sock:
+            try:
+                data, addr = self._spectator_sock.recvfrom(65536)
+                if len(data) >= 4:
+                    msg_len = struct.unpack("!I", data[:4])[0]
+                    if len(data) >= 4 + msg_len:
+                        payload = data[4:4 + msg_len]
+                        try:
+                            msg = json.loads(payload.decode("utf-8"))
+                            seq = msg.pop("_seq", -1)
+                            msg.pop("_ack", -1)
+                            print(f"Spectator connected from {addr}")
+                            self.spectator_connection = Connection(self._spectator_sock, addr)
+                            if seq >= 0:
+                                self.spectator_connection._seen.add(seq)
+                            self.spectator_connection.send_message({"type": "hello_ack", "spectator": True})
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            pass
+            except (BlockingIOError, OSError):
+                pass
+
         if self.connection:
             return True
         try:
@@ -227,7 +258,7 @@ class NetworkHost:
             self.upnp_mapped = False
 
     def cleanup(self):
-        """Remove UPnP mapping and close socket."""
+        """Remove UPnP mapping and close sockets."""
         if self.upnp_mapped and self._upnp:
             try:
                 self._upnp.deleteportmapping(self.port, 'UDP')
@@ -236,6 +267,11 @@ class NetworkHost:
         if self.sock:
             try:
                 self.sock.close()
+            except Exception:
+                pass
+        if self._spectator_sock:
+            try:
+                self._spectator_sock.close()
             except Exception:
                 pass
 
@@ -248,16 +284,20 @@ class NetworkClient:
         self.port = port
         self.connection = None
 
-    def connect(self, timeout=10.0):
+    def connect(self, timeout=10.0, spectator=False):
         """Send hello to host and wait for acknowledgment."""
-        print(f"Connecting to {self.host_ip}:{self.port}...")
+        mode_str = "spectator" if spectator else "player"
+        print(f"Connecting to {self.host_ip}:{self.port} as {mode_str}...")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setblocking(False)
         peer_addr = (self.host_ip, self.port)
         self.connection = Connection(sock, peer_addr)
         # Send hello and wait for ack
-        self.connection.send_message({"type": "hello"})
+        hello = {"type": "hello"}
+        if spectator:
+            hello["spectator"] = True
+        self.connection.send_message(hello)
         start = time.time()
         while time.time() - start < timeout:
             self.connection.flush()
@@ -295,6 +335,18 @@ class NetSession:
         self.random_seed = None
         self.connected = True
 
+        # Chat
+        self.chat_messages = []  # incoming chat messages from remote
+
+        # Desync detection
+        self.sync_hash = None
+        self.remote_sync_hash = None
+        self.desync_detected = False
+
+        # Spectator relay
+        self.is_spectator = False
+        self.spectator_conn = None  # Connection to spectator (host only)
+
     def queue_command(self, cmd):
         """Add a command from the local player."""
         self.local_commands.append(cmd)
@@ -307,25 +359,71 @@ class NetSession:
             "tick": self.current_tick + 2,
             "commands": self.local_commands,
         }
+        # Include sync hash every 30 ticks for desync detection
+        if self.current_tick % 30 == 0 and self.sync_hash is not None:
+            msg["sync_hash"] = self.sync_hash
         self.conn.send_message(msg)
         self.conn.flush()
+
+    def relay_to_spectator(self, tick, local_cmds, remote_cmds):
+        """Send both teams' commands to the spectator connection."""
+        if not self.spectator_conn:
+            return
+        msg = {
+            "type": "spectator_tick",
+            "tick": tick,
+            "player_commands": local_cmds if self.is_host else remote_cmds,
+            "ai_commands": remote_cmds if self.is_host else local_cmds,
+        }
+        self.spectator_conn.send_message(msg)
+        self.spectator_conn.flush()
 
     def receive_and_process(self):
         """Process incoming network messages."""
         self.conn.flush()  # retransmit unacked
+        if self.spectator_conn:
+            self.spectator_conn.flush()
         try:
             messages = self.conn.recv_messages()
         except ConnectionError:
             self.connected = False
             return
         for msg in messages:
-            if msg["type"] == "tick_commands":
+            msg_type = msg.get("type")
+            if msg_type == "tick_commands":
                 tick = msg["tick"]
+                # Desync detection: check sync hash
+                remote_hash = msg.get("sync_hash")
+                if remote_hash is not None:
+                    self.remote_sync_hash = remote_hash
+                    if self.sync_hash is not None and remote_hash != self.sync_hash:
+                        self.desync_detected = True
                 if tick == self.current_tick:
                     self.remote_commands = msg["commands"]
                     self.remote_tick_ready = True
                 else:
                     self.pending_remote[tick] = msg["commands"]
+            elif msg_type == "chat":
+                self.chat_messages.append(msg)
+            elif msg_type == "spectator_tick":
+                # Spectator receives both teams' commands
+                tick = msg["tick"]
+                combined = msg.get("player_commands", []) + msg.get("ai_commands", [])
+                if tick == self.current_tick:
+                    self.remote_commands = combined
+                    self.remote_tick_ready = True
+                    # Store split commands for execute_command routing
+                    self._spectator_player_cmds = msg.get("player_commands", [])
+                    self._spectator_ai_cmds = msg.get("ai_commands", [])
+                else:
+                    self.pending_remote[tick] = combined
+                    # Also store split for later
+                    if not hasattr(self, '_spectator_pending'):
+                        self._spectator_pending = {}
+                    self._spectator_pending[tick] = (
+                        msg.get("player_commands", []),
+                        msg.get("ai_commands", []),
+                    )
 
     def advance_tick(self):
         """Move to next tick after both sides' commands are processed."""
@@ -336,6 +434,12 @@ class NetSession:
         if self.current_tick in self.pending_remote:
             self.remote_commands = self.pending_remote.pop(self.current_tick)
             self.remote_tick_ready = True
+            # Restore spectator split commands if available
+            if self.is_spectator and hasattr(self, '_spectator_pending'):
+                if self.current_tick in self._spectator_pending:
+                    p, a = self._spectator_pending.pop(self.current_tick)
+                    self._spectator_player_cmds = p
+                    self._spectator_ai_cmds = a
 
     def is_tick_frame(self):
         return self.frame_counter % self.tick_interval == 0
@@ -344,10 +448,13 @@ class NetSession:
         self.frame_counter += 1
 
     def send_handshake(self, seed):
-        """Host sends random seed to client."""
+        """Host sends random seed to client (and spectator if connected)."""
         self.random_seed = seed
         self.conn.send_message({"type": "handshake", "seed": seed})
         self.conn.flush()
+        if self.spectator_conn:
+            self.spectator_conn.send_message({"type": "handshake", "seed": seed})
+            self.spectator_conn.flush()
 
     def wait_for_handshake(self, timeout=10.0):
         """Client waits for handshake from host."""

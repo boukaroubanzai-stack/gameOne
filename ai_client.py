@@ -130,6 +130,8 @@ def main():
                     for cmd in ai_brain.drain_commands():
                         net_session.queue_command(cmd)
 
+                    # Compute sync hash before sending
+                    net_session.sync_hash = state.compute_sync_hash()
                     net_session.end_tick_and_send()
                     net_session.receive_and_process()
                     if not net_session.connected:

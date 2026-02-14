@@ -38,6 +38,8 @@ class GameState:
         self._building_by_net_id: dict[int, object] = {}
         self._cached_all_units = None  # rebuilt once per frame
         self.pending_deaths = []  # [(x, y, team, "unit"/"building")] for visual effects
+        self.dying_units = []     # [(unit, timer)] fading dead player units
+        self.dying_ai_units = []  # [(unit, timer)] fading dead AI units
         self.ai_player = RemotePlayer()
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
@@ -510,8 +512,8 @@ class GameState:
             elif unit.attacking:
                 validate_attack_target(unit, dt)
             else:
-                # Auto-target: soldiers/tanks fire at enemies AND AI units in range
-                if isinstance(unit, (Soldier, Scout, Tank)):
+                # Auto-target: only when idle (no move order), so move commands disengage combat
+                if isinstance(unit, (Soldier, Scout, Tank)) and not unit.waypoints:
                     if try_auto_target(unit, dt, all_hostiles, self.ai_player.buildings):
                         continue
                     update_vision_hunting(unit, all_hostiles, self.ai_player.buildings)
@@ -574,6 +576,7 @@ class GameState:
         for u in self.ai_player.units:
             if not u.alive:
                 self.pending_deaths.append((u.x, u.y, u.team, "unit"))
+                self.dying_ai_units.append((u, 0.6))
         for b in self.ai_player.buildings:
             if b.hp <= 0:
                 self.pending_deaths.append((b.x + b.w // 2, b.y + b.h // 2, "ai", "building"))
@@ -585,6 +588,7 @@ class GameState:
         dead_units = [u for u in self.units if not u.alive]
         for u in dead_units:
             self.pending_deaths.append((u.x, u.y, u.team, "unit"))
+            self.dying_units.append((u, 0.6))
             if u in self.selected_units:
                 self.selected_units.remove(u)
                 u.selected = False
@@ -605,6 +609,10 @@ class GameState:
                 self._building_by_net_id.pop(b.net_id, None)
         self.buildings = [b for b in self.buildings if b.hp > 0]
 
+        # Tick dying unit fade timers
+        self.dying_units = [(u, t - dt) for u, t in self.dying_units if t - dt > 0]
+        self.dying_ai_units = [(u, t - dt) for u, t in self.dying_ai_units if t - dt > 0]
+
         # Clear cached list (will be rebuilt next frame)
         self._cached_all_units = None
 
@@ -619,3 +627,21 @@ class GameState:
         elif self.wave_manager.is_defeat(self.units, self.buildings):
             self.game_over = True
             self.game_result = "defeat"
+
+    def compute_sync_hash(self):
+        """Compute a hash of game state for desync detection."""
+        import hashlib
+        h = hashlib.md5()
+        # Unit counts and positions
+        for u in sorted(self.units, key=lambda u: u.net_id or 0):
+            h.update(f"{u.net_id}:{int(u.x)}:{int(u.y)}:{int(u.hp)}".encode())
+        for u in sorted(self.ai_player.units, key=lambda u: u.net_id or 0):
+            h.update(f"{u.net_id}:{int(u.x)}:{int(u.y)}:{int(u.hp)}".encode())
+        # Building counts and HP
+        for b in sorted(self.buildings, key=lambda b: b.net_id or 0):
+            h.update(f"b{b.net_id}:{int(b.hp)}".encode())
+        for b in sorted(self.ai_player.buildings, key=lambda b: b.net_id or 0):
+            h.update(f"b{b.net_id}:{int(b.hp)}".encode())
+        # Resources
+        h.update(f"r:{self.resource_manager.amount}:{self.ai_player.resource_manager.amount}".encode())
+        return h.hexdigest()[:8]

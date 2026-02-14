@@ -153,6 +153,8 @@ def try_auto_target(unit, dt, enemy_units, enemy_buildings):
 
 def update_vision_hunting(unit, enemy_units, enemy_buildings):
     """Check vision range for enemies to hunt. Updates unit waypoints."""
+    if unit.stance == "defensive":
+        return
     if unit.waypoints and not unit.hunting_target:
         return
     if unit.hunting_target:

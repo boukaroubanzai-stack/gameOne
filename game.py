@@ -178,6 +178,7 @@ def main():
     multiplayer_mode = None  # None, "host", "join"
     join_ip = None
     mp_port = 7777
+    spectator_mode = False
     for i, arg in enumerate(sys.argv):
         if arg == "--host":
             multiplayer_mode = "host"
@@ -186,6 +187,12 @@ def main():
         elif arg == "--join" and i + 1 < len(sys.argv):
             multiplayer_mode = "join"
             join_ip = sys.argv[i + 1]
+            if i + 2 < len(sys.argv) and sys.argv[i + 2].isdigit():
+                mp_port = int(sys.argv[i + 2])
+        elif arg == "--spectate" and i + 1 < len(sys.argv):
+            multiplayer_mode = "spectate"
+            join_ip = sys.argv[i + 1]
+            spectator_mode = True
             if i + 2 < len(sys.argv) and sys.argv[i + 2].isdigit():
                 mp_port = int(sys.argv[i + 2])
 
@@ -206,7 +213,9 @@ def main():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     caption = "GameOne - Simple RTS"
-    if playforme:
+    if spectator_mode:
+        caption += " [SPECTATING]"
+    elif playforme:
         caption += " [SPECTATOR]"
     elif multiplayer_mode == "host" and not auto_ai:
         caption += " [HOST]"
@@ -274,6 +283,9 @@ def main():
             pygame.display.flip()
             clock.tick(30)
         net_session = NetSession(net_host.connection, is_host=True)
+        # Set up spectator relay if a spectator connected during waiting
+        if net_host.spectator_connection:
+            net_session.spectator_conn = net_host.spectator_connection
         seed = _random.randint(0, 2**32)
         net_session.send_handshake(seed)
         if not net_session.wait_for_handshake_ack():
@@ -297,6 +309,23 @@ def main():
             pygame.quit()
             return
         local_team = "ai"
+    elif multiplayer_mode == "spectate":
+        from network import NetworkClient, NetSession
+        # Spectator connects on port+1 (separate socket from main game)
+        net_client = NetworkClient(join_ip, port=mp_port + 1)
+        try:
+            net_client.connect(spectator=True)
+        except Exception as e:
+            print(f"Failed to connect as spectator: {e}")
+            pygame.quit()
+            return
+        net_session = NetSession(net_client.connection, is_host=False)
+        net_session.is_spectator = True
+        if not net_session.wait_for_handshake():
+            print("Handshake failed!")
+            pygame.quit()
+            return
+        local_team = "player"  # Spectator views from player perspective
 
     random_seed = net_session.random_seed if net_session else None
     state = GameState(random_seed=random_seed)
@@ -355,10 +384,14 @@ def main():
     attack_move_mode = False   # True when 'A' pressed waiting for click
     last_click_time = 0.0      # for double-click detection
     last_click_unit = None     # unit clicked last time (for double-click)
+    last_group_tap = {}        # key: group_num, value: timestamp for double-tap detection
 
     # Chat input state (multiplayer only)
     chat_input_active = False
     chat_input_text = ""
+
+    # Desync detection display
+    desync_warning_timer = 0.0  # counts down from 3s when desync detected
 
     # Pre-import commands (used for both AI and multiplayer command execution)
     from commands import execute_command
@@ -404,6 +437,38 @@ def main():
                     running = False
                 continue
 
+            # Spectator mode: only allow camera movement, pause, and quit
+            if spectator_mode:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_p:
+                        paused = True
+                        _write_debug_log(state)
+                    elif event.key == pygame.K_LEFT:
+                        scroll_left = True
+                    elif event.key == pygame.K_RIGHT:
+                        scroll_right = True
+                    elif event.key == pygame.K_UP:
+                        scroll_up = True
+                    elif event.key == pygame.K_DOWN:
+                        scroll_down = True
+                    elif event.key == pygame.K_s:
+                        if audio.music_playing:
+                            audio.stop_music()
+                        else:
+                            audio.play_music()
+                elif event.type == pygame.KEYUP:
+                    if event.key == pygame.K_LEFT:
+                        scroll_left = False
+                    elif event.key == pygame.K_RIGHT:
+                        scroll_right = False
+                    elif event.key == pygame.K_UP:
+                        scroll_up = False
+                    elif event.key == pygame.K_DOWN:
+                        scroll_down = False
+                continue
+
             # Debug pause: P to pause + write log, ESC to resume
             if event.type == pygame.KEYDOWN and event.key == pygame.K_p:
                 paused = True
@@ -419,9 +484,18 @@ def main():
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
                         if chat_input_text.strip() and net_session:
-                            net_session.queue_command({
-                                "cmd": "chat",
+                            import time as _chat_send_time
+                            # Send chat directly (not through lockstep)
+                            net_session.conn.send_message({
+                                "type": "chat",
+                                "team": local_team,
                                 "message": chat_input_text.strip(),
+                            })
+                            # Add to local chat log immediately
+                            state.chat_log.append({
+                                "team": local_team,
+                                "message": chat_input_text.strip(),
+                                "time": _chat_send_time.time(),
                             })
                         chat_input_active = False
                         chat_input_text = ""
@@ -486,6 +560,18 @@ def main():
                         floating_texts.append(FloatingText(
                             camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
                             "Music ON", (200, 200, 200)))
+                elif event.key == pygame.K_v and not net_session:
+                    # Toggle stance for selected combat units
+                    toggled = 0
+                    for u in state.selected_units:
+                        if isinstance(u, (Soldier, Scout, Tank)):
+                            u.stance = "defensive" if u.stance == "aggressive" else "aggressive"
+                            toggled += 1
+                    if toggled:
+                        new_stance = state.selected_units[0].stance if state.selected_units else "aggressive"
+                        floating_texts.append(FloatingText(
+                            camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
+                            f"Stance: {new_stance}", (100, 200, 255)))
 
                 # --- QOL: Control groups (Ctrl+1-9 assign, 1-9 recall) ---
                 elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
@@ -506,11 +592,14 @@ def main():
                             control_groups[group_num] = alive_units
                             if alive_units:
                                 state.select_units(alive_units)
-                                # Center camera on group
-                                avg_x = sum(u.x for u in alive_units) / len(alive_units)
-                                avg_y = sum(u.y for u in alive_units) / len(alive_units)
-                                camera_x = max(0, min(avg_x - WIDTH // 2, WORLD_W - WIDTH))
-                                camera_y = max(0, min(avg_y - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
+                                # Double-tap: center camera on group
+                                now = pygame.time.get_ticks() / 1000.0
+                                if group_num in last_group_tap and now - last_group_tap[group_num] < 0.3:
+                                    avg_x = sum(u.x for u in alive_units) / len(alive_units)
+                                    avg_y = sum(u.y for u in alive_units) / len(alive_units)
+                                    camera_x = max(0, min(avg_x - WIDTH // 2, WORLD_W - WIDTH))
+                                    camera_y = max(0, min(avg_y - MAP_HEIGHT // 2, WORLD_H - MAP_HEIGHT))
+                                last_group_tap[group_num] = now
 
                 # --- QOL: Attack-move mode (A key) ---
                 elif event.key == pygame.K_a:
@@ -919,17 +1008,48 @@ def main():
             # --- Multiplayer tick sync (non-blocking) ---
             if net_session:
                 global _interp_t
-                if net_waiting:
+
+                # Helper to execute commands after tick ready
+                def _execute_tick_commands():
+                    state.snapshot_positions()
+                    if spectator_mode:
+                        # Spectator: execute both teams' commands separately
+                        p_cmds = getattr(net_session, '_spectator_player_cmds', [])
+                        a_cmds = getattr(net_session, '_spectator_ai_cmds', [])
+                        for cmd in p_cmds:
+                            execute_command(cmd, state, "player")
+                        for cmd in a_cmds:
+                            execute_command(cmd, state, "ai")
+                    else:
+                        for cmd in net_session.local_commands:
+                            execute_command(cmd, state, local_team)
+                        for cmd in net_session.remote_commands:
+                            execute_command(cmd, state, net_session.remote_team)
+                        # Relay to spectator if host
+                        if net_session.spectator_conn:
+                            net_session.relay_to_spectator(
+                                net_session.current_tick,
+                                net_session.local_commands,
+                                net_session.remote_commands,
+                            )
+
+                if spectator_mode:
+                    # Spectator: never sends, only receives
+                    net_session.receive_and_process()
+                    if not net_session.connected:
+                        running = False
+                    elif net_session.remote_tick_ready:
+                        _execute_tick_commands()
+                        net_session.advance_tick()
+                        net_waiting = False
+                    # No timeout for spectator — just keep waiting
+                elif net_waiting:
                     # Poll for remote commands without blocking
                     net_session.receive_and_process()
                     if not net_session.connected:
                         running = False
                     elif net_session.remote_tick_ready:
-                        state.snapshot_positions()
-                        for cmd in net_session.local_commands:
-                            execute_command(cmd, state, local_team)
-                        for cmd in net_session.remote_commands:
-                            execute_command(cmd, state, net_session.remote_team)
+                        _execute_tick_commands()
                         net_session.advance_tick()
                         net_waiting = False
                     elif _time.time() - net_wait_start > 5.0:
@@ -938,16 +1058,14 @@ def main():
                 else:
                     net_session.increment_frame()
                     if net_session.is_tick_frame():
+                        # Compute sync hash before sending
+                        net_session.sync_hash = state.compute_sync_hash()
                         net_session.end_tick_and_send()
                         net_session.receive_and_process()
                         if not net_session.connected:
                             running = False
                         elif net_session.remote_tick_ready:
-                            state.snapshot_positions()
-                            for cmd in net_session.local_commands:
-                                execute_command(cmd, state, local_team)
-                            for cmd in net_session.remote_commands:
-                                execute_command(cmd, state, net_session.remote_team)
+                            _execute_tick_commands()
                             net_session.advance_tick()
                         else:
                             net_waiting = True
@@ -956,6 +1074,32 @@ def main():
                         net_session.receive_and_process()
                         if not net_session.connected:
                             running = False
+
+                # Drain chat messages from network
+                for chat_msg in net_session.chat_messages:
+                    state.chat_log.append({
+                        "team": chat_msg.get("team", net_session.remote_team),
+                        "message": chat_msg.get("message", ""),
+                        "time": _time.time(),
+                    })
+                net_session.chat_messages.clear()
+
+                # Desync warning timer
+                if net_session.desync_detected:
+                    desync_warning_timer = 3.0
+                    net_session.desync_detected = False
+                if desync_warning_timer > 0:
+                    desync_warning_timer -= dt
+
+                # Check for late spectator connections (host only)
+                if net_session.is_host and not net_session.spectator_conn:
+                    try:
+                        net_host.accept()  # polls spectator socket
+                        if net_host.spectator_connection:
+                            net_session.spectator_conn = net_host.spectator_connection
+                    except Exception:
+                        pass
+
                 # Compute interpolation fraction between ticks
                 _interp_t = (net_session.frame_counter % net_session.tick_interval) / net_session.tick_interval
 
@@ -1063,6 +1207,11 @@ def main():
             if visible_rect.colliderect(building.rect):
                 _draw_building_offset(screen, building, cam_x, cam_y)
 
+        # Draw construction ghosts for deploying workers (both teams)
+        for u in state.units + state.ai_player.units:
+            if isinstance(u, Worker) and u.state == "deploying" and u.deploy_building and u.deploy_building_class:
+                _draw_construction_ghost(screen, u, cam_x, cam_y)
+
         # Draw own units (always visible)
         for unit in my_units:
             ix, iy = _interp_unit_pos(unit)
@@ -1073,7 +1222,10 @@ def main():
                                   unit.target_enemy, cam_x, cam_y, (255, 255, 0))
 
         # Draw opponent entities (only if within vision range of own units/buildings)
-        if local_team == "player":
+        if spectator_mode:
+            # Spectator sees everything — no fog filtering
+            _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect)
+        elif local_team == "player":
             _draw_ai_player_offset(screen, state.ai_player, cam_x, cam_y, visible_rect,
                                    fog_units=my_units, fog_buildings=my_buildings)
         else:
@@ -1137,28 +1289,35 @@ def main():
                 _draw_attack_line(screen, int(ex) - cam_x, int(ey) - cam_y,
                                   enemy.target_enemy, cam_x, cam_y, (255, 80, 80))
 
+        # Draw dying units (fade-out animation)
+        for unit, timer in state.dying_units:
+            _draw_dying_unit(screen, unit, timer, cam_x, cam_y)
+        for unit, timer in state.dying_ai_units:
+            _draw_dying_unit(screen, unit, timer, cam_x, cam_y)
+
         # Draw disaster effects (with camera offset)
         disaster_mgr.draw(screen, cam_x, cam_y)
 
         # Draw particles and damage numbers (with camera offset)
         particle_mgr.draw(screen, cam_x, cam_y)
 
-        # Fog of war dark overlay
-        fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
-        fog_surf.fill((0, 0, 0, 140))
-        for u in my_units:
-            vr = u.vision_range
-            if vr > 0:
-                ux, uy = _interp_unit_pos(u)
-                sx = int(ux) - cam_x
-                sy = int(uy) - cam_y
-                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
-        for b in my_buildings:
-            vr = _get_building_vision(b)
-            bx = int(b.x + b.w * 0.5) - cam_x
-            by = int(b.y + b.h * 0.5) - cam_y
-            pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
-        screen.blit(fog_surf, (0, 0))
+        # Fog of war dark overlay (skip for spectator — they see everything)
+        if not spectator_mode:
+            fog_surf = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+            fog_surf.fill((0, 0, 0, 140))
+            for u in my_units:
+                vr = u.vision_range
+                if vr > 0:
+                    ux, uy = _interp_unit_pos(u)
+                    sx = int(ux) - cam_x
+                    sy = int(uy) - cam_y
+                    pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
+            for b in my_buildings:
+                vr = _get_building_vision(b)
+                bx = int(b.x + b.w * 0.5) - cam_x
+                by = int(b.y + b.h * 0.5) - cam_y
+                pygame.draw.circle(fog_surf, (0, 0, 0, 0), (bx, by), int(vr))
+            screen.blit(fog_surf, (0, 0))
 
         # Draw placement zones when in placement mode
         if state.placement_mode:
@@ -1351,6 +1510,24 @@ def main():
             pygame.draw.rect(screen, (100, 200, 255), (10, input_y, box_w, 26), 1)
             prompt = get_font(18).render(f"Chat: {chat_input_text}_", True, (255, 255, 255))
             screen.blit(prompt, (14, input_y + 3))
+
+        # Desync warning (top-center, red)
+        if net_session and desync_warning_timer > 0:
+            desync_text = get_font(28).render("DESYNC DETECTED", True, (255, 50, 50))
+            desync_rect = desync_text.get_rect(center=(WIDTH // 2, 20))
+            desync_bg = pygame.Surface((desync_text.get_width() + 12, desync_text.get_height() + 6), pygame.SRCALPHA)
+            desync_bg.fill((0, 0, 0, 180))
+            screen.blit(desync_bg, (desync_rect.x - 6, desync_rect.y - 3))
+            screen.blit(desync_text, desync_rect)
+
+        # Spectator label (top-center)
+        if spectator_mode:
+            spec_text = get_font(24).render("SPECTATING", True, (200, 200, 100))
+            spec_rect = spec_text.get_rect(center=(WIDTH // 2, 50 if desync_warning_timer > 0 else 20))
+            spec_bg = pygame.Surface((spec_text.get_width() + 10, spec_text.get_height() + 4), pygame.SRCALPHA)
+            spec_bg.fill((0, 0, 0, 140))
+            screen.blit(spec_bg, (spec_rect.x - 5, spec_rect.y - 2))
+            screen.blit(spec_text, spec_rect)
 
         # FPS counter (top-right corner)
         fps_text = get_font(18).render(f"{int(clock.get_fps())} f/s", True, (200, 200, 200))
@@ -1598,11 +1775,63 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
         if unit.attack_range > 0:
             _draw_range_circle(surface, sx, sy, unit.attack_range)
 
+    # Stance indicator for defensive units
+    if hasattr(unit, 'stance') and unit.stance == "defensive":
+        from utils import get_font
+        d_label = get_font(12).render("D", True, (100, 150, 255))
+        surface.blit(d_label, (sx - d_label.get_width() // 2, sy - unit.size - 18))
+
     _draw_health_bar(surface, sx - unit.size, sy - unit.size - 6,
                      unit.size * 2, 3, unit.hp, unit.max_hp, HEALTH_BAR_BG)
 
     if isinstance(unit, Worker):
         _draw_worker_extras(surface, unit, sx, sy)
+
+
+def _draw_construction_ghost(surface, worker, cam_x, cam_y):
+    """Draw a translucent ghost of the building being constructed by a deploying worker."""
+    bclass = worker.deploy_building_class
+    tx, ty = worker.deploy_target
+    temp = bclass(tx, ty)
+    ox = tx - cam_x
+    oy = ty - cam_y
+    # Translucent building rectangle
+    ghost_surf = pygame.Surface((temp.w, temp.h), pygame.SRCALPHA)
+    color = (100, 180, 255, 80) if worker.team == "player" else (255, 180, 100, 80)
+    ghost_surf.fill(color)
+    surface.blit(ghost_surf, (ox, oy))
+    pygame.draw.rect(surface, (*color[:3], 160), (ox, oy, temp.w, temp.h), 2)
+    # Label
+    label = get_font(16).render(temp.label, True, (*color[:3], 160))
+    label_rect = label.get_rect(center=(ox + temp.w // 2, oy + temp.h // 2))
+    surface.blit(label, label_rect)
+    # Progress bar below ghost
+    build_time = bclass.build_time
+    progress = min(worker.deploy_build_timer / build_time, 1.0) if build_time > 0 else 1.0
+    bar_y = oy + temp.h + 2
+    pygame.draw.rect(surface, (60, 60, 60), (ox, bar_y, temp.w, 4))
+    pygame.draw.rect(surface, (0, 180, 255), (ox, bar_y, int(temp.w * progress), 4))
+
+
+_DEATH_TIMER_MAX = 0.6
+
+
+def _draw_dying_unit(surface, unit, timer, cam_x, cam_y):
+    """Draw a dying unit fading out over its death timer."""
+    alpha = int(255 * (timer / _DEATH_TIMER_MAX))
+    sx = int(unit.x) - cam_x
+    sy = int(unit.y) - cam_y
+    if unit.sprite:
+        temp = unit.sprite.copy()
+        temp.set_alpha(alpha)
+        r = temp.get_rect(center=(sx, sy))
+        surface.blit(temp, r)
+    else:
+        size = unit.size
+        circ_surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+        c = getattr(unit, 'color', (200, 200, 200))
+        pygame.draw.circle(circ_surf, (*c, alpha), (size, size), size)
+        surface.blit(circ_surf, (sx - size, sy - size))
 
 
 def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect,
