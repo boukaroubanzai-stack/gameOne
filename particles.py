@@ -5,6 +5,10 @@ import random
 import pygame
 from utils import get_font
 
+# LRU-style cache for fading particle surfaces keyed by (size, color, alpha)
+_particle_cache: dict[tuple, pygame.Surface] = {}
+_PARTICLE_CACHE_MAX = 512
+
 
 class Particle:
     """A single particle that moves, shrinks, and fades over its lifetime."""
@@ -111,18 +115,25 @@ class ParticleManager:
             sx = int(p.x - cam_x)
             sy = int(p.y - cam_y)
             ratio = p.lifetime / p.max_lifetime
-            alpha = int(255 * ratio)
             cur_size = max(1, int(p.size * ratio))
-            # Draw as filled circle with alpha
-            if cur_size <= 2:
-                # Small particles: just draw a rect (faster)
-                s = pygame.Surface((cur_size * 2, cur_size * 2), pygame.SRCALPHA)
-                s.fill((*p.color, alpha))
-                surface.blit(s, (sx - cur_size, sy - cur_size))
+            if ratio >= 0.95:
+                # Full alpha — draw directly onto surface (no allocation)
+                pygame.draw.circle(surface, p.color, (sx, sy), cur_size)
             else:
-                s = pygame.Surface((cur_size * 2, cur_size * 2), pygame.SRCALPHA)
-                pygame.draw.circle(s, (*p.color, alpha), (cur_size, cur_size), cur_size)
-                surface.blit(s, (sx - cur_size, sy - cur_size))
+                # Fading — need alpha surface; use cache by (size, color, alpha)
+                alpha = int(255 * ratio)
+                key = (cur_size, p.color, alpha)
+                cached = _particle_cache.get(key)
+                if cached is None:
+                    diameter = cur_size * 2
+                    cached = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+                    if cur_size <= 2:
+                        cached.fill((*p.color, alpha))
+                    else:
+                        pygame.draw.circle(cached, (*p.color, alpha), (cur_size, cur_size), cur_size)
+                    if len(_particle_cache) < _PARTICLE_CACHE_MAX:
+                        _particle_cache[key] = cached
+                surface.blit(cached, (sx - cur_size, sy - cur_size))
 
         for dn in self.damage_numbers:
             sx = int(dn.x - cam_x)

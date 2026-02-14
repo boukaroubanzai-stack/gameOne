@@ -180,4 +180,4 @@ TANK_SUPPLY = 2
 
 # Multiplayer
 MULTIPLAYER_PORT = 7777
-TICK_INTERVAL = 4  # lockstep tick every N frames
+TICK_INTERVAL = 2  # lockstep tick every N frames

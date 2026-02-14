@@ -196,17 +196,19 @@ def main():
             ai_profile_name = sys.argv[i + 1]
             break
 
-    ai_profile = None
+    # Default mode: auto-host with AI subprocess (unless explicit --host/--join)
+    auto_ai = False
+    ai_proc = None
     if not multiplayer_mode:
-        from ai_profiles import load_profile
-        ai_profile = load_profile(ai_profile_name)
+        multiplayer_mode = "host"
+        auto_ai = True
 
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     caption = "GameOne - Simple RTS"
     if playforme:
         caption += " [SPECTATOR]"
-    elif multiplayer_mode == "host":
+    elif multiplayer_mode == "host" and not auto_ai:
         caption += " [HOST]"
     elif multiplayer_mode == "join":
         caption += " [JOIN]"
@@ -241,18 +243,33 @@ def main():
         net_host = NetworkHost(port=mp_port)
         net_host.start()
         net_cleanup = net_host.cleanup
+        # Launch AI subprocess if auto_ai
+        if auto_ai:
+            import subprocess, os
+            ai_proc = subprocess.Popen([
+                sys.executable,
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_client.py"),
+                "127.0.0.1", str(mp_port),
+                "--ai", ai_profile_name,
+            ])
         # Waiting screen
         waiting = True
         while waiting:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE):
+                    if ai_proc:
+                        ai_proc.terminate()
+                        ai_proc.wait(timeout=2)
                     net_host.cleanup()
                     pygame.quit()
                     return
             if net_host.accept():
                 waiting = False
             screen.fill((30, 30, 40))
-            txt = get_font(36).render(f"Hosting on port {mp_port}... Waiting for peer.", True, (200, 200, 200))
+            if auto_ai:
+                txt = get_font(36).render("Starting AI...", True, (200, 200, 200))
+            else:
+                txt = get_font(36).render(f"Hosting on port {mp_port}... Waiting for peer.", True, (200, 200, 200))
             screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
             pygame.display.flip()
             clock.tick(30)
@@ -282,7 +299,7 @@ def main():
         local_team = "ai"
 
     random_seed = net_session.random_seed if net_session else None
-    state = GameState(ai_profile=ai_profile, multiplayer=(multiplayer_mode is not None), random_seed=random_seed)
+    state = GameState(random_seed=random_seed)
     hud = HUD()
     minimap = Minimap()
     disaster_mgr = DisasterManager(WORLD_W, WORLD_H)
@@ -347,9 +364,11 @@ def main():
     from commands import execute_command
     if net_session:
         import time as _time
-        # Input delay: tick 0 has no remote commands (they arrive one tick ahead)
+        # Jitter buffer: with 2-tick send-ahead, pre-populate ticks 0 and 1
+        # so the first two ticks don't stall waiting for remote commands.
         net_session.remote_tick_ready = True
         net_session.remote_commands = []
+        net_session.pending_remote[1] = []
 
     running = True
     try:
@@ -899,12 +918,14 @@ def main():
         if not paused:
             # --- Multiplayer tick sync (non-blocking) ---
             if net_session:
+                global _interp_t
                 if net_waiting:
                     # Poll for remote commands without blocking
                     net_session.receive_and_process()
                     if not net_session.connected:
                         running = False
                     elif net_session.remote_tick_ready:
+                        state.snapshot_positions()
                         for cmd in net_session.local_commands:
                             execute_command(cmd, state, local_team)
                         for cmd in net_session.remote_commands:
@@ -922,6 +943,7 @@ def main():
                         if not net_session.connected:
                             running = False
                         elif net_session.remote_tick_ready:
+                            state.snapshot_positions()
                             for cmd in net_session.local_commands:
                                 execute_command(cmd, state, local_team)
                             for cmd in net_session.remote_commands:
@@ -934,26 +956,19 @@ def main():
                         net_session.receive_and_process()
                         if not net_session.connected:
                             running = False
+                # Compute interpolation fraction between ticks
+                _interp_t = (net_session.frame_counter % net_session.tick_interval) / net_session.tick_interval
 
             # Only advance simulation when not waiting for remote peer
             if not net_waiting:
-                # AI think phase: generate commands (single-player only)
-                if not net_session:
-                    state.ai_player.think(sim_dt, state.units, state.buildings)
-                    for cmd in state.ai_player.drain_commands():
-                        execute_command(cmd, state, "ai")
-
                 # PlayerAI think phase: generate commands (--playforme only)
                 if player_ai is not None:
                     player_ai.think(sim_dt, state, state.wave_manager.enemies, state.ai_player)
                     for cmd in player_ai.drain_commands():
-                        execute_command(cmd, state, "player")
+                        net_session.queue_command(cmd)
 
                 state.update(sim_dt)
 
-                # Post-simulation: focus fire adjustment (--playforme only)
-                if player_ai is not None:
-                    player_ai.apply_focus_fire(state)
                 all_units_for_disaster = state.units + state.wave_manager.enemies + state.ai_player.units
                 all_buildings_for_disaster = state.buildings + state.ai_player.buildings
                 disaster_mgr.update(sim_dt, all_units_for_disaster, all_buildings_for_disaster)
@@ -1050,10 +1065,11 @@ def main():
 
         # Draw own units (always visible)
         for unit in my_units:
-            if visible_rect.collidepoint(int(unit.x), int(unit.y)):
+            ix, iy = _interp_unit_pos(unit)
+            if visible_rect.collidepoint(int(ix), int(iy)):
                 _draw_unit_offset(screen, unit, cam_x, cam_y)
             if unit.attacking and unit.target_enemy:
-                _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
+                _draw_attack_line(screen, int(ix) - cam_x, int(iy) - cam_y,
                                   unit.target_enemy, cam_x, cam_y, (255, 255, 0))
 
         # Draw opponent entities (only if within vision range of own units/buildings)
@@ -1092,10 +1108,11 @@ def main():
                             pygame.draw.rect(screen, (0, 180, 255),
                                              (ox, prog_y, int(building.w * prog), 4))
             for unit in state.units:
-                if visible_rect.collidepoint(int(unit.x), int(unit.y)) and \
-                   (_is_visible_to_team(unit.x, unit.y, my_units, my_buildings)):
-                    sx = int(unit.x) - cam_x
-                    sy = int(unit.y) - cam_y
+                ix, iy = _interp_unit_pos(unit)
+                if visible_rect.collidepoint(int(ix), int(iy)) and \
+                   (_is_visible_to_team(ix, iy, my_units, my_buildings)):
+                    sx = int(ix) - cam_x
+                    sy = int(iy) - cam_y
                     tinted = _get_opponent_tinted(unit.sprite) if unit.sprite else None
                     if tinted:
                         r = tinted.get_rect(center=(sx, sy))
@@ -1108,15 +1125,16 @@ def main():
                     if isinstance(unit, Worker):
                         _draw_worker_extras(screen, unit, sx, sy)
                 if unit.attacking and unit.target_enemy:
-                    _draw_attack_line(screen, int(unit.x) - cam_x, int(unit.y) - cam_y,
+                    _draw_attack_line(screen, int(ix) - cam_x, int(iy) - cam_y,
                                       unit.target_enemy, cam_x, cam_y, (255, 140, 0))
 
         # Draw enemies (with camera offset)
         for enemy in state.wave_manager.enemies:
-            if visible_rect.collidepoint(int(enemy.x), int(enemy.y)):
+            ex, ey = _interp_unit_pos(enemy)
+            if visible_rect.collidepoint(int(ex), int(ey)):
                 _draw_unit_offset(screen, enemy, cam_x, cam_y)
             if enemy.attacking and enemy.target_enemy:
-                _draw_attack_line(screen, int(enemy.x) - cam_x, int(enemy.y) - cam_y,
+                _draw_attack_line(screen, int(ex) - cam_x, int(ey) - cam_y,
                                   enemy.target_enemy, cam_x, cam_y, (255, 80, 80))
 
         # Draw disaster effects (with camera offset)
@@ -1131,8 +1149,9 @@ def main():
         for u in my_units:
             vr = u.vision_range
             if vr > 0:
-                sx = int(u.x) - cam_x
-                sy = int(u.y) - cam_y
+                ux, uy = _interp_unit_pos(u)
+                sx = int(ux) - cam_x
+                sy = int(uy) - cam_y
                 pygame.draw.circle(fog_surf, (0, 0, 0, 0), (sx, sy), int(vr))
         for b in my_buildings:
             vr = _get_building_vision(b)
@@ -1191,7 +1210,8 @@ def main():
         # Draw waypoint paths for selected units (with camera offset)
         for unit in state.selected_units:
             if unit.waypoints:
-                points = [(int(unit.x) - cam_x, int(unit.y) - cam_y)] + \
+                ux, uy = _interp_unit_pos(unit)
+                points = [(int(ux) - cam_x, int(uy) - cam_y)] + \
                          [(int(wx) - cam_x, int(wy) - cam_y) for wx, wy in unit.waypoints]
                 if len(points) >= 2:
                     pygame.draw.lines(screen, (255, 255, 0), False, points, 1)
@@ -1339,6 +1359,12 @@ def main():
         pygame.display.flip()
     finally:
         recorder.save()
+        if auto_ai and ai_proc:
+            ai_proc.terminate()
+            try:
+                ai_proc.wait(timeout=2)
+            except Exception:
+                ai_proc.kill()
         if net_session:
             net_session.close()
         if net_cleanup:
@@ -1376,12 +1402,25 @@ def _is_visible_to_team(ex, ey, friendly_units, friendly_buildings):
     return False
 
 
+# --- Interpolation state for smooth multiplayer rendering ---
+_interp_t = 1.0  # 0..1 fraction between prev and current tick positions
+
+
+def _interp_unit_pos(unit):
+    """Return interpolated (x, y) for a unit based on _interp_t."""
+    t = _interp_t
+    if t >= 1.0:
+        return unit.x, unit.y
+    return unit._prev_x + (unit.x - unit._prev_x) * t, unit._prev_y + (unit.y - unit._prev_y) * t
+
+
 # --- Shared drawing helpers (eliminate duplication) ---
 
 def _draw_attack_line(surface, attacker_sx, attacker_sy, target, cam_x, cam_y, color, width=1):
     """Draw a firing line from attacker screen-pos to target screen-pos."""
     if hasattr(target, 'size'):
-        tx, ty = int(target.x) - cam_x, int(target.y) - cam_y
+        ix, iy = _interp_unit_pos(target)
+        tx, ty = int(ix) - cam_x, int(iy) - cam_y
     else:
         tx, ty = target.x + target.w // 2 - cam_x, target.y + target.h // 2 - cam_y
     pygame.draw.line(surface, color, (attacker_sx, attacker_sy), (int(tx), int(ty)), width)
@@ -1543,8 +1582,9 @@ def _draw_building_offset(surface, building, cam_x, cam_y):
 def _draw_unit_offset(surface, unit, cam_x, cam_y):
     """Draw a unit with camera offset."""
     from settings import SELECT_COLOR, HEALTH_BAR_BG
-    sx = int(unit.x) - cam_x
-    sy = int(unit.y) - cam_y
+    ix, iy = _interp_unit_pos(unit)
+    sx = int(ix) - cam_x
+    sy = int(iy) - cam_y
 
     if unit.sprite:
         r = unit.sprite.get_rect(center=(sx, sy))
@@ -1572,7 +1612,7 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect,
     If fog_units/fog_buildings are provided, only draw entities visible to those
     friendly entities (fog of war for multiplayer).
     """
-    ai_player._ensure_tinted_sprites()
+    ai_player._tinted_cache.ensure_ready()
     fog = fog_units is not None
 
     # AI mineral nodes
@@ -1616,12 +1656,13 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect,
 
     # AI units
     for unit in ai_player.units:
-        if not visible_rect.collidepoint(int(unit.x), int(unit.y)):
+        ix, iy = _interp_unit_pos(unit)
+        if not visible_rect.collidepoint(int(ix), int(iy)):
             continue
-        if fog and not _is_visible_to_team(unit.x, unit.y, fog_units, fog_buildings):
+        if fog and not _is_visible_to_team(ix, iy, fog_units, fog_buildings):
             continue
-        sx = int(unit.x) - cam_x
-        sy = int(unit.y) - cam_y
+        sx = int(ix) - cam_x
+        sy = int(iy) - cam_y
         tinted = ai_player._get_tinted_sprite(unit)
         if tinted:
             r = tinted.get_rect(center=(sx, sy))
@@ -1644,9 +1685,10 @@ def _draw_ai_player_offset(surface, ai_player, cam_x, cam_y, visible_rect,
     # AI attack lines
     for ai_unit in ai_player.units:
         if ai_unit.attacking and ai_unit.target_enemy:
-            if fog and not _is_visible_to_team(ai_unit.x, ai_unit.y, fog_units, fog_buildings):
+            aix, aiy = _interp_unit_pos(ai_unit)
+            if fog and not _is_visible_to_team(aix, aiy, fog_units, fog_buildings):
                 continue
-            _draw_attack_line(surface, int(ai_unit.x) - cam_x, int(ai_unit.y) - cam_y,
+            _draw_attack_line(surface, int(aix) - cam_x, int(aiy) - cam_y,
                               ai_unit.target_enemy, cam_x, cam_y, (255, 140, 0))
 
 

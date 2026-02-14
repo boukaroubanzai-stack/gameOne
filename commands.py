@@ -1,8 +1,8 @@
 """Multiplayer command execution: translates network commands into game actions."""
 
-import math
 from units import Worker, Soldier, Scout, Tank
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
+from entity_helpers import entity_center
 from settings import (
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
     RADAR_COST,
@@ -30,29 +30,33 @@ BUILDING_COSTS = {
 def execute_command(cmd, game_state, team):
     """Execute a command for the given team ('player' or 'ai')."""
     if team == "player":
-        units = game_state.units
-        buildings = game_state.buildings
         mineral_nodes = game_state.mineral_nodes
         resource_mgr = game_state.resource_manager
     else:
-        units = game_state.ai_player.units
-        buildings = game_state.ai_player.buildings
         mineral_nodes = game_state.ai_player.mineral_nodes
         resource_mgr = game_state.ai_player.resource_manager
+    buildings = game_state.buildings if team == "player" else game_state.ai_player.buildings
+
+    # O(1) entity lookups via GameState dicts
+    def find_unit(net_id):
+        return game_state.get_unit_by_net_id(net_id)
+
+    def find_building(net_id):
+        return game_state.get_building_by_net_id(net_id)
 
     cmd_type = cmd["cmd"]
 
     if cmd_type == "move":
         target = (cmd["x"], cmd["y"])
         for uid in cmd["unit_ids"]:
-            unit = _find_unit(units, uid)
+            unit = find_unit(uid)
             if unit:
                 unit.set_target(target)
 
     elif cmd_type == "queue_waypoint":
         target = (cmd["x"], cmd["y"])
         for uid in cmd["unit_ids"]:
-            unit = _find_unit(units, uid)
+            unit = find_unit(uid)
             if unit:
                 unit.add_waypoint(target)
 
@@ -61,7 +65,7 @@ def execute_command(cmd, game_state, team):
         if 0 <= node_idx < len(mineral_nodes):
             node = mineral_nodes[node_idx]
             for uid in cmd["unit_ids"]:
-                unit = _find_unit(units, uid)
+                unit = find_unit(uid)
                 if unit and isinstance(unit, Worker):
                     unit.assign_to_mine(node, buildings, resource_mgr)
 
@@ -75,20 +79,20 @@ def execute_command(cmd, game_state, team):
         cost = BUILDING_COSTS.get(building_type, 0)
         if not resource_mgr.can_afford(cost):
             return
-        worker = _find_unit(units, worker_id)
+        worker = find_unit(worker_id)
         if worker and isinstance(worker, Worker):
             resource_mgr.spend(cost)
             worker.assign_to_deploy(building_class, (bx, by), cost)
 
     elif cmd_type == "train_unit":
         building_id = cmd["building_id"]
-        building = _find_building(buildings, building_id)
+        building = find_building(building_id)
         if building:
             building.start_production(resource_mgr)
 
     elif cmd_type == "train_scout":
         building_id = cmd["building_id"]
-        building = _find_building(buildings, building_id)
+        building = find_building(building_id)
         if building and hasattr(building, 'start_production_scout'):
             building.start_production_scout(resource_mgr)
 
@@ -101,29 +105,18 @@ def execute_command(cmd, game_state, team):
         })
         return
 
-
     elif cmd_type == "attack":
         target_id = cmd["target_id"]
         target_type = cmd.get("target_type", "unit")
-        # Find target in the opposing team
-        if team == "ai":
-            opp_units = game_state.units
-            opp_buildings = game_state.buildings
-        else:
-            opp_units = game_state.ai_player.units
-            opp_buildings = game_state.ai_player.buildings
         if target_type == "building":
-            target = _find_building(opp_buildings, target_id)
+            target = find_building(target_id)
         else:
-            target = _find_unit(opp_units, target_id)
+            target = find_unit(target_id)
         if target:
             for uid in cmd["unit_ids"]:
-                unit = _find_unit(units, uid)
+                unit = find_unit(uid)
                 if unit:
-                    if hasattr(target, 'size'):
-                        unit.set_target((target.x, target.y))
-                    else:
-                        unit.set_target((target.x + target.w // 2, target.y + target.h // 2))
+                    unit.set_target(entity_center(target))
                     unit.target_enemy = target
                     unit.attacking = True
 
@@ -131,25 +124,11 @@ def execute_command(cmd, game_state, team):
         target_type = cmd["target_type"]
         target_id = cmd["target_id"]
         if target_type == "unit":
-            target = _find_unit(units, target_id)
+            target = find_unit(target_id)
         else:
-            target = _find_building(buildings, target_id)
+            target = find_building(target_id)
         if target:
             for wid in cmd["worker_ids"]:
-                worker = _find_unit(units, wid)
+                worker = find_unit(wid)
                 if worker and isinstance(worker, Worker):
                     worker.assign_to_repair(target)
-
-
-def _find_unit(units, net_id):
-    for u in units:
-        if u.net_id == net_id:
-            return u
-    return None
-
-
-def _find_building(buildings, net_id):
-    for b in buildings:
-        if b.net_id == net_id:
-            return b
-    return None

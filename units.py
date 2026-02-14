@@ -54,6 +54,9 @@ class Unit:
         self.stuck_timer = 0.0
         self._last_x = float(x)
         self._last_y = float(y)
+        # Interpolation state (for smooth multiplayer rendering)
+        self._prev_x = float(x)
+        self._prev_y = float(y)
 
     @property
     def vision_range(self):

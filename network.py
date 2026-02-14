@@ -21,6 +21,14 @@ class Connection:
         self._seen = set()            # all seqs ever received (for dedup)
         self._unacked = {}            # seq -> (data_bytes, send_time, retransmit_count)
         self._recv_buffer = {}        # seq -> msg_dict (out-of-order buffer)
+        # Adaptive RTT (Jacobson/Karels)
+        self._rtt_estimate = 0.05    # 50ms initial estimate
+        self._rtt_variance = 0.025   # initial variance
+        self._rto = 0.15             # retransmit timeout (computed)
+        self._send_timestamps = {}   # seq -> first_send_time
+        # ACK heartbeat
+        self._last_ack_sent = -1     # highest ack value we've sent
+        self._last_ack_time = 0.0    # time of last standalone ACK
 
     def send_message(self, msg_dict):
         """Send a reliable message. Adds seq/ack headers and queues for retransmit."""
@@ -29,11 +37,17 @@ class Connection:
         data = json.dumps(msg_dict).encode("utf-8")
         header = struct.pack("!I", len(data))
         packet = header + data
+        now = time.time()
         try:
             self.sock.sendto(packet, self.peer_addr)
         except (BlockingIOError, OSError):
             pass
-        self._unacked[self._send_seq] = (packet, time.time(), 0)
+        self._send_timestamps.setdefault(self._send_seq, now)
+        self._unacked[self._send_seq] = (packet, now, 0)
+        # Piggybacked ACK counts as ack sent
+        if self._recv_seq >= 0:
+            self._last_ack_sent = self._recv_seq
+            self._last_ack_time = now
         self._send_seq += 1
 
     def flush(self):
@@ -41,7 +55,7 @@ class Connection:
         now = time.time()
         dead = []
         for seq, (packet, sent_at, count) in self._unacked.items():
-            if now - sent_at >= RETRANSMIT_INTERVAL:
+            if now - sent_at >= self._rto:
                 if count >= MAX_RETRANSMITS:
                     dead.append(seq)
                     continue
@@ -52,6 +66,16 @@ class Connection:
                 self._unacked[seq] = (packet, now, count + 1)
         for seq in dead:
             del self._unacked[seq]
+        # ACK heartbeat: send standalone ACK if we have unacknowledged recv_seq
+        if self._recv_seq > self._last_ack_sent and now - self._last_ack_time >= 0.016:
+            ack_msg = json.dumps({"_seq": -1, "_ack": self._recv_seq}).encode("utf-8")
+            header = struct.pack("!I", len(ack_msg))
+            try:
+                self.sock.sendto(header + ack_msg, self.peer_addr)
+            except (BlockingIOError, OSError):
+                pass
+            self._last_ack_sent = self._recv_seq
+            self._last_ack_time = now
         return len(self._unacked) == 0
 
     def recv_messages(self):
@@ -76,11 +100,23 @@ class Connection:
             seq = msg.pop("_seq", -1)
             ack = msg.pop("_ack", -1)
 
-            # Process ACK: remove acked messages from retransmit buffer
+            # Process ACK: remove acked messages from retransmit buffer + measure RTT
             if ack >= 0:
                 to_remove = [s for s in self._unacked if s <= ack]
                 for s in to_remove:
                     del self._unacked[s]
+                    # Measure RTT from first send time (only for non-retransmitted)
+                    if s in self._send_timestamps:
+                        rtt_sample = time.time() - self._send_timestamps[s]
+                        # Jacobson/Karels algorithm
+                        err = rtt_sample - self._rtt_estimate
+                        self._rtt_estimate += 0.125 * err
+                        self._rtt_variance += 0.25 * (abs(err) - self._rtt_variance)
+                        self._rto = max(0.03, min(self._rtt_estimate + 4 * self._rtt_variance, 1.0))
+                # Clean up timestamps for acked seqs
+                to_clean = [s for s in self._send_timestamps if s <= ack]
+                for s in to_clean:
+                    del self._send_timestamps[s]
 
             # Dedup (seq -1 = bare ACK, not a data message)
             if seq < 0 or seq in self._seen:
@@ -107,6 +143,8 @@ class Connection:
                 self.sock.sendto(header + ack_msg, self.peer_addr)
             except (BlockingIOError, OSError):
                 pass
+            self._last_ack_sent = self._recv_seq
+            self._last_ack_time = time.time()
 
         return messages
 
@@ -236,6 +274,7 @@ class NetSession:
     """Manages the multiplayer session during gameplay."""
 
     def __init__(self, connection, is_host):
+        from settings import TICK_INTERVAL
         self.conn = connection
         self.is_host = is_host
         self.local_team = "player" if is_host else "ai"
@@ -243,7 +282,7 @@ class NetSession:
 
         # Lockstep state
         self.current_tick = 0
-        self.tick_interval = 4  # execute commands every N frames
+        self.tick_interval = TICK_INTERVAL  # execute commands every N frames
         self.frame_counter = 0
 
         # Command buffers
@@ -261,11 +300,11 @@ class NetSession:
         self.local_commands.append(cmd)
 
     def end_tick_and_send(self):
-        """Send local commands one tick ahead, giving the network a full tick
-        interval to deliver them before they're needed."""
+        """Send local commands two ticks ahead, giving the network two full tick
+        intervals to deliver them before they're needed (jitter buffer)."""
         msg = {
             "type": "tick_commands",
-            "tick": self.current_tick + 1,
+            "tick": self.current_tick + 2,
             "commands": self.local_commands,
         }
         self.conn.send_message(msg)
