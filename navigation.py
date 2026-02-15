@@ -58,10 +58,10 @@ class NavGrid:
     def mark_building(self, building):
         """Mark tiles under a building as BUILDING (with padding for unit radius)."""
         pad = 20  # max unit radius padding
-        x1 = max(0, (building.x - pad) // NAV_TILE_SIZE)
-        y1 = max(0, (building.y - pad) // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, (building.x + building.w + pad) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, (building.y + building.h + pad) // NAV_TILE_SIZE)
+        x1 = max(0, int(building.x - pad) // NAV_TILE_SIZE)
+        y1 = max(0, int(building.y - pad) // NAV_TILE_SIZE)
+        x2 = min(GRID_W - 1, int(building.x + building.w + pad) // NAV_TILE_SIZE)
+        y2 = min(GRID_H - 1, int(building.y + building.h + pad) // NAV_TILE_SIZE)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 self._set(gx, gy, BUILDING)
@@ -69,10 +69,10 @@ class NavGrid:
     def unmark_building(self, building):
         """Restore tiles under a building to their static terrain state."""
         pad = 20
-        x1 = max(0, (building.x - pad) // NAV_TILE_SIZE)
-        y1 = max(0, (building.y - pad) // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, (building.x + building.w + pad) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, (building.y + building.h + pad) // NAV_TILE_SIZE)
+        x1 = max(0, int(building.x - pad) // NAV_TILE_SIZE)
+        y1 = max(0, int(building.y - pad) // NAV_TILE_SIZE)
+        x2 = min(GRID_W - 1, int(building.x + building.w + pad) // NAV_TILE_SIZE)
+        y2 = min(GRID_H - 1, int(building.y + building.h + pad) // NAV_TILE_SIZE)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 idx = self._idx(gx, gy)
