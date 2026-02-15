@@ -397,11 +397,11 @@ class GameState:
 
         Algorithm:
         1. Try direct path to waypoint.
-        2. If blocked, try perpendicular and diagonal steering directions.
-        3. If destination itself is blocked, stop adjacent to the blocker.
-        4. If stuck > 0.5s, try escape directions (left/right/back-diag).
-        5. If stuck > 1.0s, give up and clear waypoint.
-        Two moving units yield based on net_id priority (lower ID stops).
+        2. If blocked, try 6 steering angles (perpendicular + diagonals).
+        3. If destination is blocked by a stationary unit on the *last* waypoint, stop adjacent.
+        4. If stuck > 0.3s, try escape directions including backwards.
+        5. If stuck > 0.6s, re-path to final destination.
+        Two approaching moving units: higher net_id steers, lower waits briefly.
         """
         if not unit.waypoints:
             return
@@ -414,65 +414,53 @@ class GameState:
             return
 
         move = unit.speed * dt
+        nx, ny = dx / dist, dy / dist
+        px, py = -ny, nx  # perpendicular
+
+        # Only stop at blocked destinations for the *final* waypoint
+        is_final_wp = len(unit.waypoints) == 1
+
         if move >= dist:
-            # Close enough to snap — check if destination is free
+            # Close enough to snap
             blocker = self._collides_with_other(unit, tx, ty)
             if not blocker:
                 unit.x, unit.y = tx, ty
                 unit.waypoints.pop(0)
+            elif is_final_wp:
+                # Final waypoint blocked — settle adjacent
+                stop_dist = unit.size + blocker.size + 1
+                # Try approach direction, then perpendicular offsets
+                for sx, sy in [(nx, ny), (px, py), (-px, -py)]:
+                    ax = blocker.x - sx * stop_dist
+                    ay = blocker.y - sy * stop_dist
+                    if not self._collides_with_other(unit, ax, ay):
+                        unit.x, unit.y = ax, ay
+                        break
+                unit.waypoints.pop(0)
             else:
-                # Destination blocked — try to stop near it
-                nx, ny = dx / dist, dy / dist
-                stop_dist = unit.size + blocker.size
-                new_x = blocker.x - nx * stop_dist
-                new_y = blocker.y - ny * stop_dist
-                if not self._collides_with_other(unit, new_x, new_y):
-                    unit.x, unit.y = new_x, new_y
+                # Intermediate waypoint blocked — skip it and move on
                 unit.waypoints.pop(0)
             return
 
-        nx, ny = dx / dist, dy / dist
-        new_x = unit.x + nx * move
-        new_y = unit.y + ny * move
-
-        # Check if the destination itself is occupied by a stationary unit
-        blocker = self._collides_with_other(unit, tx, ty)
-        if blocker:
-            # If we're close enough to the blocker, stop next to it
-            dist_to_blocker = math.hypot(unit.x - blocker.x, unit.y - blocker.y)
-            stop_dist = unit.size + blocker.size + 2
-            if dist_to_blocker <= stop_dist + move:
-                # Place unit adjacent to the blocker
-                bx = unit.x - blocker.x
-                by = unit.y - blocker.y
-                bdist = math.hypot(bx, by)
-                if bdist > 0:
-                    unit.x = blocker.x + (bx / bdist) * stop_dist
-                    unit.y = blocker.y + (by / bdist) * stop_dist
-                unit.waypoints.pop(0)
-                return
-
-        px, py = -ny, nx  # perpendicular (left)
-
         # If stuck too long, re-path to final destination
-        if unit.stuck_timer > 1.0:
-            if len(unit.waypoints) > 0:
+        if unit.stuck_timer > 0.6:
+            if unit.waypoints:
                 final = unit.waypoints[-1]
                 new_path = self.pathfind_to(unit.x, unit.y, final[0], final[1])
                 unit.waypoints = list(new_path)
                 unit.stuck_timer = 0.0
                 unit.stuck = False
-            else:
-                unit.waypoints.pop(0)
             return
 
-        # If stuck, try escaping in multiple directions (left, right, back-left, back-right)
+        # If stuck, try escaping in many directions
         if unit.stuck:
             escape_dirs = [
-                (px, py),                             # left
-                (-px, -py),                           # right
-                (px * 0.7 - nx * 0.7, py * 0.7 - ny * 0.7),  # back-left
-                (-px * 0.7 - nx * 0.7, -py * 0.7 - ny * 0.7),  # back-right
+                (px, py), (-px, -py),                                          # sides
+                (nx * 0.7 + px * 0.7, ny * 0.7 + py * 0.7),                   # fwd-left
+                (nx * 0.7 - px * 0.7, ny * 0.7 - py * 0.7),                   # fwd-right
+                (-nx * 0.7 + px * 0.7, -ny * 0.7 + py * 0.7),                 # back-left
+                (-nx * 0.7 - px * 0.7, -ny * 0.7 - py * 0.7),                 # back-right
+                (-nx, -ny),                                                     # backwards
             ]
             for ex, ey in escape_dirs:
                 elen = math.hypot(ex, ey)
@@ -483,33 +471,57 @@ class GameState:
                 if not self._collides_with_other(unit, esc_x, esc_y):
                     unit.x, unit.y = esc_x, esc_y
                     return
+            return
 
-        # Try direct path first
+        # Check if destination is blocked by a stationary unit (final wp only)
+        if is_final_wp:
+            dest_blocker = self._collides_with_other(unit, tx, ty)
+            if dest_blocker and not (hasattr(dest_blocker, 'waypoints') and dest_blocker.waypoints):
+                dist_to_blocker = math.hypot(unit.x - dest_blocker.x, unit.y - dest_blocker.y)
+                stop_dist = unit.size + dest_blocker.size + 2
+                if dist_to_blocker <= stop_dist + move:
+                    bx = unit.x - dest_blocker.x
+                    by = unit.y - dest_blocker.y
+                    bdist = math.hypot(bx, by)
+                    if bdist > 0:
+                        unit.x = dest_blocker.x + (bx / bdist) * stop_dist
+                        unit.y = dest_blocker.y + (by / bdist) * stop_dist
+                    unit.waypoints.pop(0)
+                    return
+
+        # Try direct path
+        new_x = unit.x + nx * move
+        new_y = unit.y + ny * move
         blocker_on_path = self._collides_with_other(unit, new_x, new_y)
         if not blocker_on_path:
             unit.x, unit.y = new_x, new_y
             return
 
-        # Blocked by another moving unit — lower-priority unit waits
-        blocker_is_moving = hasattr(blocker_on_path, 'waypoints') and blocker_on_path.waypoints
-        if blocker_is_moving and (unit.net_id or 0) < (blocker_on_path.net_id or 0):
-            return  # wait for the higher-priority unit to steer around
+        # Two moving units approaching: lower net_id yields briefly (but still steers)
+        blocker_moving = hasattr(blocker_on_path, 'waypoints') and blocker_on_path.waypoints
+        if blocker_moving and (unit.net_id or 0) < (blocker_on_path.net_id or 0):
+            # Lower ID tries to steer but doesn't hard-wait
+            pass  # fall through to steering below
 
-        # Try steering around the blocker (left, right, diagonals)
-        for sign in (1, -1):
-            alt_x = unit.x + px * move * sign
-            alt_y = unit.y + py * move * sign
+        # Try 6 steering directions: perp, diag-forward, diag-back
+        steer_dirs = [
+            (px, py), (-px, -py),                                   # perpendicular
+            (nx * 0.7 + px * 0.7, ny * 0.7 + py * 0.7),            # fwd-left
+            (nx * 0.7 - px * 0.7, ny * 0.7 - py * 0.7),            # fwd-right
+            (nx * 0.3 + px * 0.95, ny * 0.3 + py * 0.95),          # wide-left
+            (nx * 0.3 - px * 0.95, ny * 0.3 - py * 0.95),          # wide-right
+        ]
+        for sx, sy in steer_dirs:
+            slen = math.hypot(sx, sy)
+            if slen > 0:
+                sx, sy = sx / slen, sy / slen
+            alt_x = unit.x + sx * move
+            alt_y = unit.y + sy * move
             if not self._collides_with_other(unit, alt_x, alt_y):
                 unit.x, unit.y = alt_x, alt_y
                 return
-        for sign in (1, -1):
-            diag_x = unit.x + (nx * 0.5 + px * 0.5 * sign) * move
-            diag_y = unit.y + (ny * 0.5 + py * 0.5 * sign) * move
-            if not self._collides_with_other(unit, diag_x, diag_y):
-                unit.x, unit.y = diag_x, diag_y
-                return
 
-        # Completely blocked from all directions — stay put this frame
+        # Completely blocked — stay put this frame (stuck timer will trigger escape)
 
     def _handle_deploying_workers(self, dt):
         """Check for player workers that have arrived at their deploy target."""
@@ -582,7 +594,7 @@ class GameState:
             moved = math.hypot(unit.x - unit._last_x, unit.y - unit._last_y)
             if unit.waypoints and not unit.attacking and moved < 0.1:
                 unit.stuck_timer += dt
-                if unit.stuck_timer >= 0.5:
+                if unit.stuck_timer >= 0.3:
                     unit.stuck = True
             else:
                 unit.stuck_timer = 0.0
