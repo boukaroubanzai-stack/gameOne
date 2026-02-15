@@ -3,6 +3,7 @@
 import json
 import os
 import datetime
+import zipfile
 import pygame
 
 
@@ -88,18 +89,23 @@ class ReplayRecorder:
         return out
 
     def save(self):
-        """Write all frames to a JSON lines file in replay/ folder."""
+        """Write all frames to a JSON lines file compressed as a zip in replay/ folder."""
         if self._saved or not self.frames:
             return None
         os.makedirs("replay", exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join("replay", f"replay_{ts}.json")
-        with open(filename, "w") as f:
-            for frame in self.frames:
-                f.write(json.dumps(frame, separators=(",", ":")) + "\n")
+        json_name = f"replay_{ts}.json"
+        zip_filename = os.path.join("replay", f"replay_{ts}.zip")
+        # Build JSON lines content in memory, then write compressed
+        lines = []
+        for frame in self.frames:
+            lines.append(json.dumps(frame, separators=(",", ":")) + "\n")
+        content = "".join(lines)
+        with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(json_name, content)
         self._saved = True
-        print(f"Replay saved: {filename} ({len(self.frames)} frames, {self.real_time:.1f}s)")
-        return filename
+        print(f"Replay saved: {zip_filename} ({len(self.frames)} frames, {self.real_time:.1f}s)")
+        return zip_filename
 
 
 # --- Proxy classes for replay rendering ---
@@ -263,11 +269,20 @@ class ReplayPlayer:
 
     def __init__(self, filename):
         self.frames = []
-        with open(filename, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    self.frames.append(json.loads(line))
+        if filename.endswith(".zip"):
+            with zipfile.ZipFile(filename, "r") as zf:
+                name = zf.namelist()[0]
+                data = zf.read(name).decode("utf-8")
+                for line in data.splitlines():
+                    line = line.strip()
+                    if line:
+                        self.frames.append(json.loads(line))
+        else:
+            with open(filename, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self.frames.append(json.loads(line))
         if not self.frames:
             raise ValueError(f"Empty replay file: {filename}")
         self.total_time = self.frames[-1]["t"]
