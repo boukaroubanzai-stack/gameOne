@@ -93,7 +93,6 @@ class GameState:
         # Spawn starting workers near the Town Center
         for i in range(STARTING_WORKERS):
             w = Worker(tc.rally_x + i * 25, tc.rally_y)
-            w.pathfinder = self.pathfind_to
             self.assign_unit_id(w)
             self.units.append(w)
 
@@ -106,8 +105,6 @@ class GameState:
             self.nav_grid.mark_building(b)
         for u in self.ai_player.units:
             self.assign_unit_id(u)
-            if isinstance(u, Worker):
-                u.pathfinder = self.pathfind_to
 
     def snapshot_positions(self):
         """Save current unit positions for interpolation (called before tick commands)."""
@@ -442,14 +439,11 @@ class GameState:
                 unit.waypoints.pop(0)
             return
 
-        # If stuck too long, re-path to final destination
+        # If stuck too long, skip current waypoint to make progress
         if unit.stuck_timer > 0.6:
-            if unit.waypoints:
-                final = unit.waypoints[-1]
-                new_path = self.pathfind_to(unit.x, unit.y, final[0], final[1])
-                unit.waypoints = list(new_path)
-                unit.stuck_timer = 0.0
-                unit.stuck = False
+            unit.waypoints.pop(0)
+            unit.stuck_timer = 0.0
+            unit.stuck = False
             return
 
         # If stuck, try escaping in many directions
@@ -611,8 +605,6 @@ class GameState:
                 if new_unit is not None:
                     self.assign_unit_id(new_unit)
                     place_unit_at_free_spot(new_unit, self._cached_all_units)
-                    if isinstance(new_unit, Worker):
-                        new_unit.pathfinder = self.pathfind_to
                     self.units.append(new_unit)
 
         # Record wave enemy deaths before wave_manager cleanup
