@@ -55,24 +55,24 @@ class NavGrid:
 
     # --- Building mark/unmark ---
 
+    def _tile_range(self, x, y, w, h, pad=0):
+        """Convert world rect to grid tile range, clamped to grid bounds. Always returns ints."""
+        x1 = int(max(0, int(x - pad) // NAV_TILE_SIZE))
+        y1 = int(max(0, int(y - pad) // NAV_TILE_SIZE))
+        x2 = int(min(GRID_W - 1, int(x + w + pad) // NAV_TILE_SIZE))
+        y2 = int(min(GRID_H - 1, int(y + h + pad) // NAV_TILE_SIZE))
+        return x1, y1, x2, y2
+
     def mark_building(self, building):
         """Mark tiles under a building as BUILDING (with padding for unit radius)."""
-        pad = 20  # max unit radius padding
-        x1 = max(0, int(building.x - pad) // NAV_TILE_SIZE)
-        y1 = max(0, int(building.y - pad) // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, int(building.x + building.w + pad) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, int(building.y + building.h + pad) // NAV_TILE_SIZE)
+        x1, y1, x2, y2 = self._tile_range(building.x, building.y, building.w, building.h, pad=20)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 self._set(gx, gy, BUILDING)
 
     def unmark_building(self, building):
         """Restore tiles under a building to their static terrain state."""
-        pad = 20
-        x1 = max(0, int(building.x - pad) // NAV_TILE_SIZE)
-        y1 = max(0, int(building.y - pad) // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, int(building.x + building.w + pad) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, int(building.y + building.h + pad) // NAV_TILE_SIZE)
+        x1, y1, x2, y2 = self._tile_range(building.x, building.y, building.w, building.h, pad=20)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 idx = self._idx(gx, gy)
@@ -82,10 +82,7 @@ class NavGrid:
 
     def is_rect_clear(self, x, y, w, h):
         """Check if a world-space rectangle is free of terrain obstacles."""
-        x1 = max(0, int(x) // NAV_TILE_SIZE)
-        y1 = max(0, int(y) // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, int(x + w) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, int(y + h) // NAV_TILE_SIZE)
+        x1, y1, x2, y2 = self._tile_range(x, y, w, h)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 if self._static_grid[self._idx(gx, gy)] == TERRAIN:
