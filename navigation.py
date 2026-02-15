@@ -82,10 +82,10 @@ class NavGrid:
 
     def is_rect_clear(self, x, y, w, h):
         """Check if a world-space rectangle is free of terrain obstacles."""
-        x1 = max(0, x // NAV_TILE_SIZE)
-        y1 = max(0, y // NAV_TILE_SIZE)
-        x2 = min(GRID_W - 1, (x + w) // NAV_TILE_SIZE)
-        y2 = min(GRID_H - 1, (y + h) // NAV_TILE_SIZE)
+        x1 = max(0, int(x) // NAV_TILE_SIZE)
+        y1 = max(0, int(y) // NAV_TILE_SIZE)
+        x2 = min(GRID_W - 1, int(x + w) // NAV_TILE_SIZE)
+        y2 = min(GRID_H - 1, int(y + h) // NAV_TILE_SIZE)
         for gy in range(y1, y2 + 1):
             for gx in range(x1, x2 + 1):
                 if self._static_grid[self._idx(gx, gy)] == TERRAIN:
