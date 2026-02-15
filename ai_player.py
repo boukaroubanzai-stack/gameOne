@@ -925,6 +925,8 @@ class AIPlayer:
                     new_unit.team = "ai"
                     if self._game_state:
                         self._game_state.assign_unit_id(new_unit)
+                        if isinstance(new_unit, Worker):
+                            new_unit.pathfinder = self._game_state.pathfind_to
                     place_unit_at_free_spot(new_unit, all_units_for_collision)
                     self.units.append(new_unit)
 

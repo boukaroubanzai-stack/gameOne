@@ -14,6 +14,7 @@ from entity_helpers import (
     collides_with_other, place_unit_at_free_spot, handle_deploying_workers,
     entity_center, validate_attack_target, try_auto_target, update_vision_hunting,
 )
+from navigation import NavGrid
 from settings import (
     WORLD_W, WORLD_H, STARTING_WORKERS,
     PLAYER_TC_POS,
@@ -44,8 +45,11 @@ class GameState:
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
         self.chat_log = []        # list of {"team": str, "message": str, "time": float}
+        self.nav_grid = NavGrid()
+        self.terrain_rects = []
         if random_seed is not None:
             random.seed(random_seed)
+            self.terrain_rects = self.nav_grid.generate_terrain(random_seed)
 
         self.ai_player._game_state = self
         self._setup_starting_state()
@@ -89,14 +93,21 @@ class GameState:
         # Spawn starting workers near the Town Center
         for i in range(STARTING_WORKERS):
             w = Worker(tc.rally_x + i * 25, tc.rally_y)
+            w.pathfinder = self.pathfind_to
             self.assign_unit_id(w)
             self.units.append(w)
+
+        # Mark starting buildings on nav grid
+        self.nav_grid.mark_building(tc)
 
         # Assign net_ids to AI starting entities
         for b in self.ai_player.buildings:
             self.assign_building_id(b)
+            self.nav_grid.mark_building(b)
         for u in self.ai_player.units:
             self.assign_unit_id(u)
+            if isinstance(u, Worker):
+                u.pathfinder = self.pathfind_to
 
     def snapshot_positions(self):
         """Save current unit positions for interpolation (called before tick commands)."""
@@ -190,6 +201,13 @@ class GameState:
                     best = b
         return best
 
+    def pathfind_to(self, sx, sy, gx, gy):
+        """Compute A* path from (sx,sy) to (gx,gy). Returns waypoint list."""
+        path = self.nav_grid.find_path(sx, sy, gx, gy)
+        if path:
+            return path
+        return [(gx, gy)]
+
     # --- Supply / population cap ---
 
     @staticmethod
@@ -265,6 +283,9 @@ class GameState:
                 if refund > 0:
                     self.resource_manager.deposit(refund)
                 unit.assign_to_mine(node, self.buildings, self.resource_manager)
+                # Replace direct waypoint with pathfound waypoints
+                path = self.pathfind_to(unit.x, unit.y, node.x, node.y)
+                unit.waypoints = list(path)
 
     def is_in_placement_zone(self, x, y, team="player"):
         """Check if position (x, y) is within a valid building placement zone."""
@@ -311,6 +332,10 @@ class GameState:
             if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
                 return False
 
+        # Check terrain obstacles
+        if not self.nav_grid.is_rect_clear(x, y, b.w, b.h):
+            return False
+
         # Check placement zone
         center_x = x + b.w // 2
         center_y = y + b.h // 2
@@ -346,7 +371,10 @@ class GameState:
                 refund = unit.cancel_deploy()
                 if refund > 0:
                     self.resource_manager.deposit(refund)
-            unit.set_target(target)
+            path = self.pathfind_to(unit.x, unit.y, target[0], target[1])
+            unit.set_target(path[0])
+            for wp in path[1:]:
+                unit.add_waypoint(wp)
 
     def command_queue_waypoint(self, pos):
         positions = self._calculate_formation_positions(pos, self.selected_units)
@@ -355,7 +383,9 @@ class GameState:
                 refund = unit.cancel_deploy()
                 if refund > 0:
                     self.resource_manager.deposit(refund)
-            unit.add_waypoint(target)
+            path = self.pathfind_to(unit.x, unit.y, target[0], target[1])
+            for wp in path:
+                unit.add_waypoint(wp)
 
     def _collides_with_other(self, unit, x, y):
         """Check if unit at position (x, y) would overlap any other unit."""
@@ -424,9 +454,16 @@ class GameState:
 
         px, py = -ny, nx  # perpendicular (left)
 
-        # If stuck too long, give up and clear waypoint
+        # If stuck too long, re-path to final destination
         if unit.stuck_timer > 1.0:
-            unit.waypoints.pop(0)
+            if len(unit.waypoints) > 0:
+                final = unit.waypoints[-1]
+                new_path = self.pathfind_to(unit.x, unit.y, final[0], final[1])
+                unit.waypoints = list(new_path)
+                unit.stuck_timer = 0.0
+                unit.stuck = False
+            else:
+                unit.waypoints.pop(0)
             return
 
         # If stuck, try escaping in multiple directions (left, right, back-left, back-right)
@@ -562,6 +599,8 @@ class GameState:
                 if new_unit is not None:
                     self.assign_unit_id(new_unit)
                     place_unit_at_free_spot(new_unit, self._cached_all_units)
+                    if isinstance(new_unit, Worker):
+                        new_unit.pathfinder = self.pathfind_to
                     self.units.append(new_unit)
 
         # Record wave enemy deaths before wave_manager cleanup
@@ -580,6 +619,7 @@ class GameState:
         for b in self.ai_player.buildings:
             if b.hp <= 0:
                 self.pending_deaths.append((b.x + b.w // 2, b.y + b.h // 2, "ai", "building"))
+                self.nav_grid.unmark_building(b)
 
         # Update AI player (simulation only — think() is called by game.py)
         self.ai_player.update_simulation(dt, self.units, self.buildings, self._cached_all_units)
@@ -607,6 +647,7 @@ class GameState:
                 self.selected_building = None
             if b.net_id is not None:
                 self._building_by_net_id.pop(b.net_id, None)
+            self.nav_grid.unmark_building(b)
         self.buildings = [b for b in self.buildings if b.hp > 0]
 
         # Tick dying unit fade timers

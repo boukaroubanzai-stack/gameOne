@@ -90,10 +90,14 @@ def handle_deploying_workers(units, target_buildings, check_buildings, check_min
                 if not node.depleted and b.rect.colliderect(node.rect.inflate(10, 10)):
                     valid = False
                     break
+        if valid and game_state:
+            if not game_state.nav_grid.is_rect_clear(bx, by, b.w, b.h):
+                valid = False
 
         if valid:
             if game_state:
                 game_state.assign_building_id(b)
+                game_state.nav_grid.mark_building(b)
             target_buildings.append(b)
             if isinstance(b, Watchguard):
                 unit.hp = 0

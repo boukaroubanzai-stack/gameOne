@@ -178,6 +178,9 @@ SOLDIER_SUPPLY = 1
 SCOUT_SUPPLY = 1
 TANK_SUPPLY = 2
 
+# Navigation
+NAV_TILE_SIZE = 32
+
 # Multiplayer
 MULTIPLAYER_PORT = 7777
 TICK_INTERVAL = 2  # lockstep tick every N frames

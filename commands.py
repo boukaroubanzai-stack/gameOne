@@ -51,14 +51,19 @@ def execute_command(cmd, game_state, team):
         for uid in cmd["unit_ids"]:
             unit = find_unit(uid)
             if unit:
-                unit.set_target(target)
+                path = game_state.pathfind_to(unit.x, unit.y, target[0], target[1])
+                unit.set_target(path[0])
+                for wp in path[1:]:
+                    unit.add_waypoint(wp)
 
     elif cmd_type == "queue_waypoint":
         target = (cmd["x"], cmd["y"])
         for uid in cmd["unit_ids"]:
             unit = find_unit(uid)
             if unit:
-                unit.add_waypoint(target)
+                path = game_state.pathfind_to(unit.x, unit.y, target[0], target[1])
+                for wp in path:
+                    unit.add_waypoint(wp)
 
     elif cmd_type == "mine":
         node_idx = cmd["node_index"]
@@ -68,6 +73,8 @@ def execute_command(cmd, game_state, team):
                 unit = find_unit(uid)
                 if unit and isinstance(unit, Worker):
                     unit.assign_to_mine(node, buildings, resource_mgr)
+                    path = game_state.pathfind_to(unit.x, unit.y, node.x, node.y)
+                    unit.waypoints = list(path)
 
     elif cmd_type == "place_building":
         building_type = cmd["building_type"]
@@ -76,6 +83,10 @@ def execute_command(cmd, game_state, team):
         building_class = BUILDING_CLASSES.get(building_type)
         if not building_class:
             return
+        # Check terrain clear
+        temp = building_class(bx, by)
+        if not game_state.nav_grid.is_rect_clear(bx, by, temp.w, temp.h):
+            return
         cost = BUILDING_COSTS.get(building_type, 0)
         if not resource_mgr.can_afford(cost):
             return
@@ -83,6 +94,8 @@ def execute_command(cmd, game_state, team):
         if worker and isinstance(worker, Worker):
             resource_mgr.spend(cost)
             worker.assign_to_deploy(building_class, (bx, by), cost)
+            path = game_state.pathfind_to(worker.x, worker.y, bx, by)
+            worker.waypoints = list(path)
 
     elif cmd_type == "train_unit":
         building_id = cmd["building_id"]
@@ -113,10 +126,14 @@ def execute_command(cmd, game_state, team):
         else:
             target = find_unit(target_id)
         if target:
+            tx, ty = entity_center(target)
             for uid in cmd["unit_ids"]:
                 unit = find_unit(uid)
                 if unit:
-                    unit.set_target(entity_center(target))
+                    path = game_state.pathfind_to(unit.x, unit.y, tx, ty)
+                    unit.set_target(path[0])
+                    for wp in path[1:]:
+                        unit.add_waypoint(wp)
                     unit.target_enemy = target
                     unit.attacking = True
 
@@ -128,7 +145,10 @@ def execute_command(cmd, game_state, team):
         else:
             target = find_building(target_id)
         if target:
+            tx, ty = entity_center(target)
             for wid in cmd["worker_ids"]:
                 worker = find_unit(wid)
                 if worker and isinstance(worker, Worker):
                     worker.assign_to_repair(target)
+                    path = game_state.pathfind_to(worker.x, worker.y, tx, ty)
+                    worker.waypoints = list(path)

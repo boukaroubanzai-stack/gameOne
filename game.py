@@ -1186,6 +1186,14 @@ def main():
             if 0 <= sy <= MAP_HEIGHT:
                 pygame.draw.line(screen, (30, 75, 30), (0, sy), (WIDTH, sy), 1)
 
+        # Draw terrain obstacles
+        for rx, ry, rw, rh in state.terrain_rects:
+            ox = rx - cam_x
+            oy = ry - cam_y
+            if -rw < ox < WIDTH and -rh < oy < MAP_HEIGHT:
+                pygame.draw.rect(screen, (60, 50, 40), (ox, oy, rw, rh))
+                pygame.draw.rect(screen, (45, 38, 30), (ox, oy, rw, rh), 2)
+
         # Helper to check if a world-space rect is visible on screen
         visible_rect = pygame.Rect(cam_x - 100, cam_y - 100, WIDTH + 200, MAP_HEIGHT + 200)
 

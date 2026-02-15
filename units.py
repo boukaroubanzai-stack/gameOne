@@ -277,6 +277,14 @@ class Worker(Unit):
         # Repair state
         self.repair_target = None
         self.repair_rate = 5  # HP per second
+        # Pathfinding callback: (sx, sy, gx, gy) -> [(wx, wy), ...]
+        self.pathfinder = None
+
+    def _pathfind_waypoints(self, gx, gy):
+        """Return pathfound waypoints if pathfinder is set, else direct waypoint."""
+        if self.pathfinder:
+            return list(self.pathfinder(self.x, self.y, gx, gy))
+        return [(gx, gy)]
 
     @property
     def vision_range(self):
@@ -472,7 +480,7 @@ class Worker(Unit):
                 # If worker is inside building rect, use the center bottom
                 if edge_x == self.x and edge_y == self.y:
                     edge_x, edge_y = cx, bld.y + bld.h
-                self.waypoints = [(edge_x, edge_y)]
+                self.waypoints = self._pathfind_waypoints(edge_x, edge_y)
 
         elif self.state == "returning":
             # Check if drop-off building was destroyed — try to find another TC
@@ -489,7 +497,7 @@ class Worker(Unit):
                 edge_y = max(bld.y, min(self.y, bld.y + bld.h))
                 if edge_x == self.x and edge_y == self.y:
                     edge_x, edge_y = cx, bld.y + bld.h
-                self.waypoints = [(edge_x, edge_y)]
+                self.waypoints = self._pathfind_waypoints(edge_x, edge_y)
             bld_rect = bld.rect.inflate(self.size * 2, self.size * 2)
             near_building = bld_rect.collidepoint(int(self.x), int(self.y))
             if near_building or not self.waypoints:
@@ -499,7 +507,7 @@ class Worker(Unit):
                     self.carry_amount = 0
                 if self.assigned_node and not self.assigned_node.depleted:
                     self.state = "moving_to_mine"
-                    self.waypoints = [(self.assigned_node.x, self.assigned_node.y)]
+                    self.waypoints = self._pathfind_waypoints(self.assigned_node.x, self.assigned_node.y)
                 else:
                     self.cancel_mining()
 
@@ -533,7 +541,7 @@ class Worker(Unit):
                     self.cancel_repair()
             else:
                 # Move toward target (update waypoint to track moving units)
-                self.waypoints = [(tx, ty)]
+                self.waypoints = self._pathfind_waypoints(tx, ty)
 
     def draw(self, surface):
         super().draw(surface)

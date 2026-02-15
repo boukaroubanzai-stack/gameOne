@@ -106,6 +106,14 @@ class Minimap:
         surf = self.surface
         surf.fill(BG_COLOR)
 
+        # Draw terrain obstacles
+        for rx, ry, rw, rh in getattr(game_state, 'terrain_rects', []):
+            mx = int(rx * SCALE_X)
+            my = int(ry * SCALE_Y)
+            mw = max(int(rw * SCALE_X), 1)
+            mh = max(int(rh * SCALE_Y), 1)
+            pygame.draw.rect(surf, (60, 50, 40), (mx, my, mw, mh))
+
         if local_team == "player":
             my_units = game_state.units
             my_buildings = game_state.buildings
