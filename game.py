@@ -1067,6 +1067,11 @@ def main():
                     if net_session.is_tick_frame():
                         # Compute sync hash before sending
                         net_session.sync_hash = state.compute_sync_hash()
+                        net_session.sync_hash_tick = net_session.current_tick
+                        # Check against remote hash for same tick
+                        remote = net_session.remote_sync_hashes.pop(net_session.current_tick, None)
+                        if remote is not None and remote != net_session.sync_hash:
+                            net_session.desync_detected = True
                         net_session.end_tick_and_send()
                         net_session.receive_and_process()
                         if not net_session.connected:

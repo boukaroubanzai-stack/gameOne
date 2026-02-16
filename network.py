@@ -340,7 +340,8 @@ class NetSession:
 
         # Desync detection
         self.sync_hash = None
-        self.remote_sync_hash = None
+        self.sync_hash_tick = None  # tick at which sync_hash was computed
+        self.remote_sync_hashes = {}  # tick -> hash from remote
         self.desync_detected = False
 
         # Spectator relay
@@ -362,6 +363,7 @@ class NetSession:
         # Include sync hash every 30 ticks for desync detection
         if self.current_tick % 30 == 0 and self.sync_hash is not None:
             msg["sync_hash"] = self.sync_hash
+            msg["sync_tick"] = self.sync_hash_tick
         self.conn.send_message(msg)
         self.conn.flush()
 
@@ -392,12 +394,15 @@ class NetSession:
             msg_type = msg.get("type")
             if msg_type == "tick_commands":
                 tick = msg["tick"]
-                # Desync detection: check sync hash
+                # Desync detection: store remote hash by tick
                 remote_hash = msg.get("sync_hash")
                 if remote_hash is not None:
-                    self.remote_sync_hash = remote_hash
-                    if self.sync_hash is not None and remote_hash != self.sync_hash:
-                        self.desync_detected = True
+                    remote_tick = msg.get("sync_tick")
+                    if remote_tick is not None:
+                        self.remote_sync_hashes[remote_tick] = remote_hash
+                        # Compare if we have a local hash for the same tick
+                        if self.sync_hash_tick == remote_tick and self.sync_hash != remote_hash:
+                            self.desync_detected = True
                 if tick == self.current_tick:
                     self.remote_commands = msg["commands"]
                     self.remote_tick_ready = True
@@ -431,6 +436,10 @@ class NetSession:
         self.current_tick += 1
         self.remote_tick_ready = False
         self.remote_commands = []
+        # Clean up old remote sync hashes
+        stale = [t for t in self.remote_sync_hashes if t < self.current_tick]
+        for t in stale:
+            del self.remote_sync_hashes[t]
         if self.current_tick in self.pending_remote:
             self.remote_commands = self.pending_remote.pop(self.current_tick)
             self.remote_tick_ready = True
