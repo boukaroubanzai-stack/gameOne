@@ -108,16 +108,26 @@ def main():
                 ai_brain._garrison_units &= alive_ids
                 ai_brain._scouting_units &= alive_ids
 
+            # Helper: execute commands in deterministic order (player first)
+            def _execute_tick():
+                if local_team == "player":
+                    player_cmds = net_session.local_commands
+                    ai_cmds = net_session.remote_commands
+                else:
+                    player_cmds = net_session.remote_commands
+                    ai_cmds = net_session.local_commands
+                for cmd in player_cmds:
+                    execute_command(cmd, state, "player")
+                for cmd in ai_cmds:
+                    execute_command(cmd, state, "ai")
+
             # --- Multiplayer tick sync ---
             if net_waiting:
                 net_session.receive_and_process()
                 if not net_session.connected:
                     running = False
                 elif net_session.remote_tick_ready:
-                    for cmd in net_session.local_commands:
-                        execute_command(cmd, state, local_team)
-                    for cmd in net_session.remote_commands:
-                        execute_command(cmd, state, net_session.remote_team)
+                    _execute_tick()
                     net_session.advance_tick()
                     net_waiting = False
                 elif time.time() - net_wait_start > 5.0:
@@ -137,10 +147,7 @@ def main():
                     if not net_session.connected:
                         running = False
                     elif net_session.remote_tick_ready:
-                        for cmd in net_session.local_commands:
-                            execute_command(cmd, state, local_team)
-                        for cmd in net_session.remote_commands:
-                            execute_command(cmd, state, net_session.remote_team)
+                        _execute_tick()
                         net_session.advance_tick()
                     else:
                         net_waiting = True
