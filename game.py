@@ -1021,16 +1021,23 @@ def main():
                         for cmd in a_cmds:
                             execute_command(cmd, state, "ai")
                     else:
-                        for cmd in net_session.local_commands:
-                            execute_command(cmd, state, local_team)
-                        for cmd in net_session.remote_commands:
-                            execute_command(cmd, state, net_session.remote_team)
+                        # Always execute player commands first for determinism
+                        if local_team == "player":
+                            player_cmds = net_session.local_commands
+                            ai_cmds = net_session.remote_commands
+                        else:
+                            player_cmds = net_session.remote_commands
+                            ai_cmds = net_session.local_commands
+                        for cmd in player_cmds:
+                            execute_command(cmd, state, "player")
+                        for cmd in ai_cmds:
+                            execute_command(cmd, state, "ai")
                         # Relay to spectator if host
                         if net_session.spectator_conn:
                             net_session.relay_to_spectator(
                                 net_session.current_tick,
-                                net_session.local_commands,
-                                net_session.remote_commands,
+                                player_cmds,
+                                ai_cmds,
                             )
 
                 if spectator_mode:
