@@ -205,14 +205,14 @@ class NavGrid:
         start = self.world_to_grid(sx, sy)
         goal = self.world_to_grid(gx, gy)
 
-        # If start is blocked, find nearest walkable
-        if self.get(start[0], start[1]) != WALKABLE:
+        # If start is on terrain, find nearest walkable
+        if self.get(start[0], start[1]) == TERRAIN:
             start = self._nearest_walkable(start[0], start[1])
             if start is None:
                 return None
 
-        # If goal is blocked, find nearest walkable to goal
-        if self.get(goal[0], goal[1]) != WALKABLE:
+        # If goal is on terrain, find nearest walkable to goal
+        if self.get(goal[0], goal[1]) == TERRAIN:
             goal = self._nearest_walkable(goal[0], goal[1])
             if goal is None:
                 return None
@@ -253,13 +253,13 @@ class NavGrid:
                 nx, ny = cx + dx, cy + dy
                 if nx < 0 or nx >= GRID_W or ny < 0 or ny >= GRID_H:
                     continue
-                if self.grid[ny * GRID_W + nx] != WALKABLE:
+                if self.grid[ny * GRID_W + nx] == TERRAIN:
                     continue
                 # No diagonal corner-cutting
                 if dx != 0 and dy != 0:
-                    if self.grid[cy * GRID_W + (cx + dx)] != WALKABLE:
+                    if self.grid[cy * GRID_W + (cx + dx)] == TERRAIN:
                         continue
-                    if self.grid[(cy + dy) * GRID_W + cx] != WALKABLE:
+                    if self.grid[(cy + dy) * GRID_W + cx] == TERRAIN:
                         continue
 
                 new_g = cur_g + cost
@@ -281,7 +281,7 @@ class NavGrid:
         return None
 
     def _nearest_walkable(self, gx, gy):
-        """Find nearest walkable tile to (gx, gy) via expanding rings."""
+        """Find nearest non-terrain tile to (gx, gy) via expanding rings."""
         for r in range(1, 20):
             for dx in range(-r, r + 1):
                 for dy in range(-r, r + 1):
@@ -289,7 +289,7 @@ class NavGrid:
                         continue
                     nx, ny = gx + dx, gy + dy
                     if 0 <= nx < GRID_W and 0 <= ny < GRID_H:
-                        if self.grid[ny * GRID_W + nx] == WALKABLE:
+                        if self.grid[ny * GRID_W + nx] != TERRAIN:
                             return (nx, ny)
         return None
 
@@ -337,7 +337,7 @@ class NavGrid:
         cx, cy = x0, y0
 
         while True:
-            if self.get(cx, cy) != WALKABLE:
+            if self.get(cx, cy) == TERRAIN:
                 return False
             if cx == x1 and cy == y1:
                 return True
