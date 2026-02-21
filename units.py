@@ -256,7 +256,7 @@ class Worker(Unit):
 
     @classmethod
     def load_assets(cls):
-        cls.sprite = _load_sprite(WORKER_SPRITE, (WORKER_SIZE * 2, WORKER_SIZE * 2))
+        cls.sprite = _load_sprite(WORKER_SPRITE, (WORKER_SIZE * 4, WORKER_SIZE * 4))
 
     def __init__(self, x, y):
         super().__init__(x, y, WORKER_HP, WORKER_SPEED, WORKER_SIZE)
