@@ -13,9 +13,15 @@ def entity_center(entity):
 
 
 def collides_with_other(unit, x, y, all_units):
-    """Check if unit at position (x, y) would overlap any other unit."""
+    """Check if unit at position (x, y) would overlap any other unit.
+    Same-team workers ignore each other (they overlap freely)."""
+    is_worker = unit.__class__.__name__ == "Worker"
+    unit_team = getattr(unit, "team", None)
     for other in all_units:
         if other is unit:
+            continue
+        # Same-team workers don't collide with each other
+        if is_worker and other.__class__.__name__ == "Worker" and getattr(other, "team", None) == unit_team:
             continue
         dist = math.hypot(x - other.x, y - other.y)
         if dist < unit.size + other.size:
@@ -118,7 +124,9 @@ def handle_deploying_workers(units, target_buildings, check_buildings, check_min
 def validate_attack_target(unit, dt):
     """Validate current attack target and try to attack if in range.
 
-    Returns True if attack continues, False if disengaged.
+    If target moves out of attack range but is still in vision range,
+    chase it instead of disengaging.
+    Returns True if attack continues or chasing, False if disengaged.
     """
     target = unit.target_enemy
     if not target:
@@ -130,8 +138,15 @@ def validate_attack_target(unit, dt):
         unit.attacking = False
         return False
     tx, ty = entity_center(target)
-    if unit.distance_to(tx, ty) <= unit.attack_range:
+    dist = unit.distance_to(tx, ty)
+    if dist <= unit.attack_range:
         unit.try_attack(dt)
+        return True
+    elif dist <= unit.vision_range:
+        # Target moved out of attack range but still visible — chase it
+        unit.waypoints = [(tx, ty)]
+        unit.hunting_target = target
+        unit.attacking = False
         return True
     else:
         unit.target_enemy = None
