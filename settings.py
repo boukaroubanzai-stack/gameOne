@@ -167,6 +167,15 @@ RADAR_BUILD_TIME = 16.0
 RADAR_VISION = 2000  # vision range in pixels
 RADAR_SPRITE = os.path.join(ASSETS_DIR, "radar.png")
 
+# Repair Crane
+REPAIR_CRANE_COST = 300
+REPAIR_CRANE_SIZE = (48, 48)
+REPAIR_CRANE_HP = 400
+REPAIR_CRANE_BUILD_TIME = 15.0
+REPAIR_CRANE_RANGE = 100
+REPAIR_CRANE_HEAL_RATE = 10  # HP per second (placeholder)
+REPAIR_CRANE_SPRITE = os.path.join(ASSETS_DIR, "repair_crane.png")
+
 # Building placement zones
 BUILDING_ZONE_TC_RADIUS = 500      # can place within 500px of a Town Center
 BUILDING_ZONE_BUILDING_RADIUS = 100  # can place within 100px of any other building

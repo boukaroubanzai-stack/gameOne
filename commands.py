@@ -1,11 +1,11 @@
 """Multiplayer command execution: translates network commands into game actions."""
 
 from units import Worker, Soldier, Scout, Tank
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar, RepairCrane
 from entity_helpers import entity_center
 from settings import (
     BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST,
-    RADAR_COST,
+    RADAR_COST, REPAIR_CRANE_COST,
 )
 
 BUILDING_CLASSES = {
@@ -15,6 +15,7 @@ BUILDING_CLASSES = {
     "tower": DefenseTower,
     "watchguard": Watchguard,
     "radar": Radar,
+    "repair_crane": RepairCrane,
 }
 
 BUILDING_COSTS = {
@@ -24,6 +25,7 @@ BUILDING_COSTS = {
     "tower": TOWER_COST,
     "watchguard": WATCHGUARD_COST,
     "radar": RADAR_COST,
+    "repair_crane": REPAIR_CRANE_COST,
 }
 
 

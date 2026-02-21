@@ -1,4 +1,4 @@
-"""Building entities: TownCenter, Barracks, Factory, DefenseTower, Watchguard, Radar."""
+"""Building entities: TownCenter, Barracks, Factory, DefenseTower, Watchguard, Radar, RepairCrane."""
 
 import math
 import os
@@ -16,6 +16,8 @@ from settings import (
     TOWER_SIZE, TOWER_HP, TOWER_FIRE_RATE, TOWER_DAMAGE, TOWER_RANGE, TOWER_SPRITE, TOWER_BUILD_TIME,
     WATCHGUARD_SIZE, WATCHGUARD_HP, WATCHGUARD_ZONE_RADIUS, WATCHGUARD_BUILD_TIME, WATCHGUARD_SPRITE,
     RADAR_SIZE, RADAR_HP, RADAR_BUILD_TIME, RADAR_VISION, RADAR_SPRITE,
+    REPAIR_CRANE_SIZE, REPAIR_CRANE_HP, REPAIR_CRANE_BUILD_TIME,
+    REPAIR_CRANE_RANGE, REPAIR_CRANE_HEAL_RATE, REPAIR_CRANE_SPRITE,
 )
 from units import Soldier, Scout, Tank, Worker
 
@@ -353,3 +355,61 @@ class Radar(Building):
         if self.selected:
             cx, cy = self.center
             pygame.draw.circle(surface, (100, 140, 100, 80), (cx, cy), self.vision_range, 1)
+
+
+class RepairCrane(Building):
+    """Auto-heals nearby mechanical units (Soldier, Scout, Tank) within range."""
+    label = "Repair Crane"
+    sprite = None
+    build_time = REPAIR_CRANE_BUILD_TIME
+    heal_range = REPAIR_CRANE_RANGE
+    heal_rate = REPAIR_CRANE_HEAL_RATE
+
+    @classmethod
+    def load_assets(cls):
+        cls.sprite = _load_sprite(REPAIR_CRANE_SPRITE, REPAIR_CRANE_SIZE)
+
+    def __init__(self, x, y):
+        super().__init__(x, y, REPAIR_CRANE_SIZE, hp=REPAIR_CRANE_HP)
+        self.heal_target = None
+        self._heal_accumulator = 0.0
+
+    def can_train(self):
+        return (Worker, 0, 0)
+
+    def start_production(self, resource_mgr):
+        return False
+
+    def update(self, dt):
+        pass
+
+    def heal_update(self, dt, friendly_units):
+        """Find most damaged mechanical unit in range and heal it."""
+        cx, cy = self.center
+        best = None
+        best_ratio = 1.0
+        best_id = -1
+        for unit in friendly_units:
+            if not unit.alive:
+                continue
+            if not isinstance(unit, (Soldier, Scout, Tank)):
+                continue
+            if unit.hp >= unit.max_hp:
+                continue
+            dist = math.hypot(cx - unit.x, cy - unit.y)
+            if dist <= self.heal_range:
+                ratio = unit.hp / unit.max_hp
+                uid = unit.net_id if unit.net_id is not None else -1
+                if ratio < best_ratio or (ratio == best_ratio and uid < best_id):
+                    best_ratio = ratio
+                    best_id = uid
+                    best = unit
+        self.heal_target = best
+        if best:
+            self._heal_accumulator += self.heal_rate * dt
+            heal_amount = int(self._heal_accumulator)
+            if heal_amount > 0:
+                best.hp = min(best.hp + heal_amount, best.max_hp)
+                self._heal_accumulator -= heal_amount
+        else:
+            self._heal_accumulator = 0.0

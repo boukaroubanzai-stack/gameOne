@@ -4,7 +4,7 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar, RepairCrane
 from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode, MINERAL_POSITIONS
 from waves import WaveManager
@@ -600,6 +600,8 @@ class GameState:
         for building in self.buildings:
             if isinstance(building, DefenseTower):
                 building.combat_update(dt, all_hostiles)
+            elif isinstance(building, RepairCrane):
+                building.heal_update(dt, self.units)
             else:
                 new_unit = building.update(dt)
                 if new_unit is not None:

@@ -4,7 +4,7 @@ import math
 import random
 import pygame
 from resources import ResourceManager
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Radar
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Radar, RepairCrane
 from units import Worker, Soldier, Scout, Tank
 from minerals import MineralNode
 from entity_helpers import (
@@ -919,6 +919,8 @@ class AIPlayer:
         for building in self.buildings:
             if isinstance(building, DefenseTower):
                 building.combat_update(dt, player_units)
+            elif isinstance(building, RepairCrane):
+                building.heal_update(dt, self.units)
             else:
                 new_unit = building.update(dt)
                 if new_unit is not None:

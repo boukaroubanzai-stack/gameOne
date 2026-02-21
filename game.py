@@ -7,7 +7,7 @@ import datetime
 import settings
 from settings import (
     WIDTH, HEIGHT, FPS, MAP_COLOR, MAP_HEIGHT, DRAG_BOX_COLOR,
-    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, WATCHGUARD_SIZE, RADAR_SIZE,
+    BARRACKS_SIZE, FACTORY_SIZE, TOWN_CENTER_SIZE, TOWER_SIZE, WATCHGUARD_SIZE, RADAR_SIZE, REPAIR_CRANE_SIZE,
     WORLD_W, WORLD_H, SCROLL_SPEED, SCROLL_EDGE,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
 )
@@ -17,7 +17,7 @@ from game_state import GameState
 from hud import HUD
 from minimap import Minimap
 from units import Soldier, Scout, Tank, Worker, Yanuses
-from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar
+from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar, RepairCrane
 from disasters import DisasterManager
 from audio import AudioManager
 from player_ai import PlayerAI
@@ -241,6 +241,7 @@ def main():
     DefenseTower.load_assets()
     Watchguard.load_assets()
     Radar.load_assets()
+    RepairCrane.load_assets()
 
     # Multiplayer connection phase
     net_session = None
@@ -517,7 +518,7 @@ def main():
                         state.placement_mode = None
                     else:
                         state.deselect_all()
-                elif event.key in (pygame.K_b, pygame.K_f, pygame.K_t, pygame.K_d, pygame.K_g, pygame.K_r):
+                elif event.key in (pygame.K_b, pygame.K_f, pygame.K_t, pygame.K_d, pygame.K_g, pygame.K_r, pygame.K_c):
                     has_worker = any(isinstance(u, Worker) for u in state.selected_units)
                     if has_worker:
                         if event.key == pygame.K_b:
@@ -532,6 +533,8 @@ def main():
                             state.placement_mode = "watchguard"
                         elif event.key == pygame.K_r:
                             state.placement_mode = "radar"
+                        elif event.key == pygame.K_c:
+                            state.placement_mode = "repair_crane"
                     else:
                         floating_texts.append(FloatingText(
                             camera_x + WIDTH // 2, camera_y + MAP_HEIGHT // 2,
@@ -1759,6 +1762,29 @@ def _draw_building_offset(surface, building, cam_x, cam_y):
         surface.blit(label, label_rect)
         return
 
+    # RepairCrane: green heal range circle + heal line
+    if isinstance(building, RepairCrane):
+        cx_rc = ox + building.w // 2
+        cy_rc = oy + building.h // 2
+        if building.sprite:
+            surface.blit(building.sprite, (ox, oy))
+        else:
+            pygame.draw.rect(surface, (100, 100, 110), (ox, oy, building.w, building.h))
+            pygame.draw.rect(surface, (70, 70, 80), (ox, oy, building.w, building.h), 2)
+        if building.selected:
+            r = pygame.Rect(ox, oy, building.w, building.h)
+            pygame.draw.rect(surface, SELECT_COLOR, r.inflate(6, 6), 2)
+            pygame.draw.circle(surface, (0, 200, 80), (int(cx_rc), int(cy_rc)), building.heal_range, 1)
+        if building.heal_target and building.heal_target.alive:
+            tx = building.heal_target.x - cam_x
+            ty = building.heal_target.y - cam_y
+            pygame.draw.line(surface, (0, 220, 80), (int(cx_rc), int(cy_rc)), (int(tx), int(ty)), 2)
+        _draw_health_bar(surface, ox, oy - 8, building.w, 4, building.hp, building.max_hp, HEALTH_BAR_BG)
+        label = get_font(18).render(building.label, True, (255, 255, 255))
+        label_rect = label.get_rect(center=(int(cx_rc), oy - 16))
+        surface.blit(label, label_rect)
+        return
+
     if building.sprite:
         surface.blit(building.sprite, (ox, oy))
     if building.selected:
@@ -1954,6 +1980,8 @@ def _get_placement_size(mode):
         return WATCHGUARD_SIZE
     elif mode == "radar":
         return RADAR_SIZE
+    elif mode == "repair_crane":
+        return REPAIR_CRANE_SIZE
     return (64, 64)
 
 
@@ -1970,6 +1998,8 @@ def _get_placement_sprite(mode):
         return Watchguard.sprite
     elif mode == "radar":
         return Radar.sprite
+    elif mode == "repair_crane":
+        return RepairCrane.sprite
     return None
 
 
@@ -2026,6 +2056,7 @@ def _replay_main(filename):
     DefenseTower.load_assets()
     Watchguard.load_assets()
     Radar.load_assets()
+    RepairCrane.load_assets()
 
     # Init replay proxy sprites
     ReplayUnit.init_sprites()
