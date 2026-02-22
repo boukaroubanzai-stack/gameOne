@@ -7,7 +7,7 @@ from units import Worker
 from settings import (
     HUD_HEIGHT,
     HUD_BG, HUD_TEXT, BUTTON_COLOR, BUTTON_HOVER, BUTTON_TEXT,
-    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST, RADAR_COST,
+    BARRACKS_COST, FACTORY_COST, TOWN_CENTER_COST, TOWER_COST, WATCHGUARD_COST, RADAR_COST, REPAIR_CRANE_COST,
     SOLDIER_COST, SCOUT_COST, TANK_COST, WORKER_COST,
     TOTAL_WAVES, FIRST_WAVE_DELAY, WAVE_INTERVAL,
 )
@@ -23,6 +23,7 @@ TOWER_ACCENT = (120, 120, 140)
 WATCHGUARD_ACCENT = (140, 110, 60)
 RADAR_ACCENT = (100, 160, 100)
 SCOUT_ACCENT = (0, 180, 180)
+REPAIR_CRANE_ACCENT = (0, 160, 80)
 
 
 class HUD:
@@ -51,8 +52,9 @@ class HUD:
             "tower": pygame.Rect(610, y, btn_w, btn_h),
             "watchguard": pygame.Rect(720, y, btn_w, btn_h),
             "radar": pygame.Rect(830, y, btn_w, btn_h),
-            "train": pygame.Rect(940, y, 120, btn_h),
-            "train_scout": pygame.Rect(1070, y, 120, btn_h),
+            "repair_crane": pygame.Rect(940, y, btn_w, btn_h),
+            "train": pygame.Rect(1050, y, 120, btn_h),
+            "train_scout": pygame.Rect(1180, y, 120, btn_h),
             "idle_worker": pygame.Rect(280, y + btn_h + 4, 110, 28),
         }
 
@@ -84,6 +86,10 @@ class HUD:
         if self.buttons["radar"].collidepoint(pos):
             if has_worker:
                 game_state.placement_mode = "radar"
+            return True
+        if self.buttons["repair_crane"].collidepoint(pos):
+            if has_worker:
+                game_state.placement_mode = "repair_crane"
             return True
         if self.buttons["train"].collidepoint(pos):
             if game_state.selected_building:
@@ -214,6 +220,9 @@ class HUD:
         self._draw_button(surface, self.buttons["radar"],
                           f"Radar [R] ${RADAR_COST}", RADAR_ACCENT, mouse_pos,
                           has_worker and game_state.resource_manager.can_afford(RADAR_COST))
+        self._draw_button(surface, self.buttons["repair_crane"],
+                          f"Crane [C] ${REPAIR_CRANE_COST}", REPAIR_CRANE_ACCENT, mouse_pos,
+                          has_worker and game_state.resource_manager.can_afford(REPAIR_CRANE_COST))
 
         # Idle worker button
         local_units = game_state.units if local_team == "player" else game_state.ai_player.units
@@ -235,9 +244,17 @@ class HUD:
             info_x = minimap_left - 320
             surface.blit(self.font.render(f"Selected: {sb.label}", True, HUD_TEXT),
                          (info_x, settings.MAP_HEIGHT + 10))
-            # Check if this is a DefenseTower (has combat attributes, no production)
-            from buildings import DefenseTower
-            if isinstance(sb, DefenseTower):
+            # Check if this is a non-production building with special info
+            from buildings import DefenseTower, RepairCrane
+            if isinstance(sb, RepairCrane):
+                surface.blit(self.small_font.render(
+                    f"Heal Rate: {sb.heal_rate}/s  Range: {sb.heal_range}",
+                    True, HUD_TEXT), (info_x, settings.MAP_HEIGHT + 30))
+                status = "Healing" if sb.heal_target else "Idle"
+                status_color = (0, 200, 80) if sb.heal_target else (150, 200, 150)
+                surface.blit(self.small_font.render(f"Status: {status}", True, status_color),
+                             (info_x, settings.MAP_HEIGHT + 48))
+            elif isinstance(sb, DefenseTower):
                 # Show combat stats instead of train button
                 surface.blit(self.small_font.render(
                     f"Damage: {sb.damage}  Rate: {sb.fire_rate}/s  Range: {sb.attack_range}",

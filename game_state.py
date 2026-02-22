@@ -555,9 +555,10 @@ class GameState:
             elif unit.attacking:
                 validate_attack_target(unit, dt)
             else:
-                # Auto-target: only when idle (no move order), so move commands disengage combat
-                if isinstance(unit, (Soldier, Scout, Tank)) and not unit.waypoints:
+                # Auto-target: when idle or hunting (but not player-issued move orders)
+                if isinstance(unit, (Soldier, Scout, Tank)) and (not unit.waypoints or unit.hunting_target):
                     if try_auto_target(unit, dt, all_hostiles, self.ai_player.buildings):
+                        unit.waypoints = []
                         continue
                     update_vision_hunting(unit, all_hostiles, self.ai_player.buildings)
                 if unit.waypoints:
