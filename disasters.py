@@ -25,7 +25,7 @@ class DisasterManager:
         self.world_h = world_h if world_h is not None else WORLD_H
         self.active_disasters = []
         self.disaster_timer = 0.0
-        self.next_disaster_time = random.uniform(45, 90)
+        self.next_disaster_time = random.uniform(90, 180)
         self.shake_offset = (0, 0)
         # Track which units/buildings already took one-time damage per disaster
         self._damage_applied = {}
@@ -67,7 +67,7 @@ class DisasterManager:
             "y": y,
             "radius": 150,
             "warning_duration": 0.5,
-            "damage": 50,
+            "damage": 100,
             "phase": "warning",
             "particles": [],
         }
@@ -122,7 +122,7 @@ class DisasterManager:
             "radius": 200,
             "drift_dx": math.cos(angle) * 20,
             "drift_dy": math.sin(angle) * 20,
-            "damage_per_sec": 5,
+            "damage_per_sec": 10,
             "phase": "active",
             "pulse_timer": 0.0,
         }
@@ -208,7 +208,7 @@ class DisasterManager:
             for b in all_buildings:
                 hp = getattr(b, "hp", None)
                 if hp is not None:
-                    b.hp -= 10
+                    b.hp -= 20
             d["building_damage_applied"] = True
 
         # Slow all units by 50% (reduce speed, restore when done)
@@ -244,7 +244,7 @@ class DisasterManager:
                     # Direct hit damage
                     hp = getattr(target, "hp", None)
                     if hp is not None:
-                        target.hp -= 40
+                        target.hp -= 80
 
                     # Splash damage
                     for u in all_units:
@@ -257,7 +257,7 @@ class DisasterManager:
                             if dist <= 30:
                                 u_hp = getattr(u, "hp", None)
                                 if u_hp is not None:
-                                    u.hp -= 10
+                                    u.hp -= 20
 
                     # Generate bolt segments for visual
                     segments = self._generate_bolt_segments(tx, ty)
@@ -348,7 +348,7 @@ class DisasterManager:
         self.disaster_timer += dt
         if self.disaster_timer >= self.next_disaster_time:
             self.disaster_timer = 0.0
-            self.next_disaster_time = random.uniform(45, 90)
+            self.next_disaster_time = random.uniform(90, 180)
             self._spawn_random_disaster()
 
         # Update each active disaster

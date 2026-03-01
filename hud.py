@@ -200,29 +200,30 @@ class HUD:
             surface.blit(self.small_font.render(enemies_text, True, (255, 150, 150)),
                          (15, settings.MAP_HEIGHT + 56))
 
-        # Build buttons (with hotkey labels) — require worker selected + can afford
+        # Build buttons — only shown when a worker is selected
         has_worker = any(isinstance(u, Worker) for u in game_state.selected_units)
-        self._draw_button(surface, self.buttons["towncenter"],
-                          f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(TOWN_CENTER_COST))
-        self._draw_button(surface, self.buttons["barracks"],
-                          f"Barracks [B] ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(BARRACKS_COST))
-        self._draw_button(surface, self.buttons["factory"],
-                          f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(FACTORY_COST))
-        self._draw_button(surface, self.buttons["tower"],
-                          f"Tower [D] ${TOWER_COST}", TOWER_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(TOWER_COST))
-        self._draw_button(surface, self.buttons["watchguard"],
-                          f"Guard [G] ${WATCHGUARD_COST}", WATCHGUARD_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(WATCHGUARD_COST))
-        self._draw_button(surface, self.buttons["radar"],
-                          f"Radar [R] ${RADAR_COST}", RADAR_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(RADAR_COST))
-        self._draw_button(surface, self.buttons["repair_crane"],
-                          f"Crane [C] ${REPAIR_CRANE_COST}", REPAIR_CRANE_ACCENT, mouse_pos,
-                          has_worker and game_state.resource_manager.can_afford(REPAIR_CRANE_COST))
+        if has_worker:
+            self._draw_button(surface, self.buttons["towncenter"],
+                              f"TC [T] ${TOWN_CENTER_COST}", TOWN_CENTER_ACCENT, mouse_pos,
+                              local_rm.can_afford(TOWN_CENTER_COST))
+            self._draw_button(surface, self.buttons["barracks"],
+                              f"Barracks [B] ${BARRACKS_COST}", BARRACKS_ACCENT, mouse_pos,
+                              local_rm.can_afford(BARRACKS_COST))
+            self._draw_button(surface, self.buttons["factory"],
+                              f"Factory [F] ${FACTORY_COST}", FACTORY_ACCENT, mouse_pos,
+                              local_rm.can_afford(FACTORY_COST))
+            self._draw_button(surface, self.buttons["tower"],
+                              f"Tower [D] ${TOWER_COST}", TOWER_ACCENT, mouse_pos,
+                              local_rm.can_afford(TOWER_COST))
+            self._draw_button(surface, self.buttons["watchguard"],
+                              f"Guard [G] ${WATCHGUARD_COST}", WATCHGUARD_ACCENT, mouse_pos,
+                              local_rm.can_afford(WATCHGUARD_COST))
+            self._draw_button(surface, self.buttons["radar"],
+                              f"Radar [R] ${RADAR_COST}", RADAR_ACCENT, mouse_pos,
+                              local_rm.can_afford(RADAR_COST))
+            self._draw_button(surface, self.buttons["repair_crane"],
+                              f"Crane [C] ${REPAIR_CRANE_COST}", REPAIR_CRANE_ACCENT, mouse_pos,
+                              local_rm.can_afford(REPAIR_CRANE_COST))
 
         # Idle worker button
         local_units = game_state.units if local_team == "player" else game_state.ai_player.units

@@ -544,14 +544,16 @@ class GameState:
 
         # Update player units
         for unit in self.units:
-            if isinstance(unit, Worker) and unit.state != "idle":
-                # Worker mining state machine: handle movement with avoidance,
-                # then let the worker check for state transitions
-                if unit.waypoints:
+            if isinstance(unit, Worker):
+                # Workers never attack — only mine/deploy/repair/move
+                if unit.state != "idle":
+                    if unit.waypoints:
+                        self._move_unit_with_avoidance(unit, dt)
+                    unit.update_state(dt)
+                elif unit.waypoints:
                     self._move_unit_with_avoidance(unit, dt)
-                # Run worker state logic (mining timer, deposits, etc.)
-                # but skip the base movement since we already handled it
-                unit.update_state(dt)
+                else:
+                    unit.update(dt)
             elif unit.attacking:
                 validate_attack_target(unit, dt)
             else:

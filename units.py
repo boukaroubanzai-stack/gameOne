@@ -261,6 +261,10 @@ class Worker(Unit):
     def __init__(self, x, y):
         super().__init__(x, y, WORKER_HP, WORKER_SPEED, WORKER_SIZE)
         self._vision_range = SOLDIER_RANGE * 1.2  # same vision as soldiers
+        # Workers never attack — force combat state off
+        self.target_enemy = None
+        self.attacking = False
+        self.hunting_target = None
         self.state = "idle"  # "idle" | "moving_to_mine" | "waiting" | "mining" | "returning" | "deploying" | "repairing"
         self.assigned_node = None
         self.drop_off_building = None
@@ -367,6 +371,8 @@ class Worker(Unit):
         self.cancel_mining()
         self.cancel_deploy()
         self.cancel_repair()
+        self.stuck = False
+        self.stuck_timer = 0.0
         self.waypoints = [pos]
 
     def add_waypoint(self, pos):
@@ -376,6 +382,8 @@ class Worker(Unit):
             self.cancel_deploy()
         if self.state == "repairing":
             self.cancel_repair()
+        self.stuck = False
+        self.stuck_timer = 0.0
         self.waypoints.append(pos)
 
     def update(self, dt):

@@ -107,17 +107,24 @@ def _write_debug_log(state):
     lines.append(f"--- BUILDINGS ({len(state.buildings)}) ---")
     for i, b in enumerate(state.buildings):
         queue_len = len(b.production_queue)
-        lines.append(f"  [{i}] {b.label} at ({b.x}, {b.y}) HP={b.hp}/{b.max_hp} "
-                      f"Queue={queue_len} Selected={b.selected}")
+        rally = f" Rally=({int(b.rally_x)},{int(b.rally_y)})" if hasattr(b, 'rally_x') else ""
+        lines.append(f"  [{i}] {b.label} net_id={b.net_id} at ({b.x}, {b.y}) HP={b.hp}/{b.max_hp} "
+                      f"Queue={queue_len} Selected={b.selected}{rally}")
     lines.append("")
 
     # Player units
     lines.append(f"--- PLAYER UNITS ({len(state.units)}) ---")
     for i, u in enumerate(state.units):
         wp = len(u.waypoints)
-        base = (f"  [{i}] {u.name} at ({u.x:.0f}, {u.y:.0f}) HP={u.hp}/{u.max_hp} "
+        base = (f"  [{i}] {u.name} net_id={u.net_id} at ({u.x:.0f}, {u.y:.0f}) HP={u.hp}/{u.max_hp} "
                 f"Speed={u.speed} WP={wp} Attacking={u.attacking} Stuck={u.stuck} "
                 f"Selected={u.selected}")
+        if u.waypoints:
+            wp_str = " -> ".join(f"({w[0]:.0f},{w[1]:.0f})" for w in u.waypoints[:5])
+            base += f" WPto=[{wp_str}]"
+        if u.hunting_target:
+            ht = u.hunting_target
+            base += f" Hunting={getattr(ht, 'name', 'building')} at ({getattr(ht, 'x', 0):.0f},{getattr(ht, 'y', 0):.0f})"
         if isinstance(u, Worker):
             base += f" State={u.state} Carry={u.carry_amount}"
         if u.attack_range > 0:
@@ -740,8 +747,15 @@ def main():
                         if hasattr(sb, 'rally_x'):
                             if not hud.is_in_hud(screen_pos):
                                 world_pos = _screen_to_world(screen_pos, camera_x, camera_y)
-                                sb.rally_x = world_pos[0]
-                                sb.rally_y = world_pos[1]
+                                if net_session:
+                                    net_session.queue_command({
+                                        "cmd": "rally_point",
+                                        "building_id": sb.net_id,
+                                        "x": world_pos[0], "y": world_pos[1],
+                                    })
+                                else:
+                                    sb.rally_x = world_pos[0]
+                                    sb.rally_y = world_pos[1]
                                 move_markers.append(MoveMarker(world_pos[0], world_pos[1]))
                         continue
 
@@ -792,7 +806,7 @@ def main():
                                 clicked_bld = state.get_local_building_at(world_pos, local_team)
                             else:
                                 clicked_bld = state.get_building_at(world_pos)
-                            if clicked_bld and clicked_bld.hp > 0 and clicked_bld.hp < clicked_bld.max_hp:
+                            if clicked_bld and clicked_bld.hp > 0 and clicked_bld.hp < clicked_bld.max_hp and getattr(clicked_bld, 'team', 'player') == local_team:
                                 repair_target = clicked_bld
                     if repair_target:
                         if net_session:
@@ -1829,6 +1843,15 @@ def _draw_unit_offset(surface, unit, cam_x, cam_y):
 
     _draw_health_bar(surface, sx - unit.size, sy - unit.size - 6,
                      unit.size * 2, 3, unit.hp, unit.max_hp, HEALTH_BAR_BG)
+
+    # Draw waypoint path line for selected units
+    if unit.selected and unit.waypoints:
+        prev_x, prev_y = sx, sy
+        for wx, wy in unit.waypoints:
+            dwx, dwy = int(wx) - cam_x, int(wy) - cam_y
+            pygame.draw.line(surface, (0, 200, 100, 160), (prev_x, prev_y), (dwx, dwy), 1)
+            pygame.draw.circle(surface, (0, 200, 100), (dwx, dwy), 3, 1)
+            prev_x, prev_y = dwx, dwy
 
     if isinstance(unit, Worker):
         _draw_worker_extras(surface, unit, sx, sy)

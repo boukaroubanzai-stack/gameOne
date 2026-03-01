@@ -43,15 +43,29 @@ def execute_command(cmd, game_state, team):
     def find_unit(net_id):
         return game_state.get_unit_by_net_id(net_id)
 
+    def find_own_unit(net_id):
+        """Find unit and verify it belongs to the executing team."""
+        unit = game_state.get_unit_by_net_id(net_id)
+        if unit and getattr(unit, 'team', 'player') == team:
+            return unit
+        return None
+
     def find_building(net_id):
         return game_state.get_building_by_net_id(net_id)
+
+    def find_own_building(net_id):
+        """Find building and verify it belongs to the executing team."""
+        bld = game_state.get_building_by_net_id(net_id)
+        if bld and getattr(bld, 'team', 'player') == team:
+            return bld
+        return None
 
     cmd_type = cmd["cmd"]
 
     if cmd_type == "move":
         target = (cmd["x"], cmd["y"])
         for uid in cmd["unit_ids"]:
-            unit = find_unit(uid)
+            unit = find_own_unit(uid)
             if unit:
                 path = game_state.pathfind_to(unit.x, unit.y, target[0], target[1])
                 unit.set_target(path[0])
@@ -61,7 +75,7 @@ def execute_command(cmd, game_state, team):
     elif cmd_type == "queue_waypoint":
         target = (cmd["x"], cmd["y"])
         for uid in cmd["unit_ids"]:
-            unit = find_unit(uid)
+            unit = find_own_unit(uid)
             if unit:
                 path = game_state.pathfind_to(unit.x, unit.y, target[0], target[1])
                 for wp in path:
@@ -72,7 +86,7 @@ def execute_command(cmd, game_state, team):
         if 0 <= node_idx < len(mineral_nodes):
             node = mineral_nodes[node_idx]
             for uid in cmd["unit_ids"]:
-                unit = find_unit(uid)
+                unit = find_own_unit(uid)
                 if unit and isinstance(unit, Worker):
                     unit.assign_to_mine(node, buildings, resource_mgr)
                     path = game_state.pathfind_to(unit.x, unit.y, node.x, node.y)
@@ -92,7 +106,7 @@ def execute_command(cmd, game_state, team):
         cost = BUILDING_COSTS.get(building_type, 0)
         if not resource_mgr.can_afford(cost):
             return
-        worker = find_unit(worker_id)
+        worker = find_own_unit(worker_id)
         if worker and isinstance(worker, Worker):
             resource_mgr.spend(cost)
             worker.assign_to_deploy(building_class, (bx, by), cost)
@@ -101,15 +115,22 @@ def execute_command(cmd, game_state, team):
 
     elif cmd_type == "train_unit":
         building_id = cmd["building_id"]
-        building = find_building(building_id)
+        building = find_own_building(building_id)
         if building:
             building.start_production(resource_mgr)
 
     elif cmd_type == "train_scout":
         building_id = cmd["building_id"]
-        building = find_building(building_id)
+        building = find_own_building(building_id)
         if building and hasattr(building, 'start_production_scout'):
             building.start_production_scout(resource_mgr)
+
+    elif cmd_type == "rally_point":
+        building_id = cmd["building_id"]
+        building = find_own_building(building_id)
+        if building and hasattr(building, 'rally_x'):
+            building.rally_x = cmd["x"]
+            building.rally_y = cmd["y"]
 
     elif cmd_type == "chat":
         import time
@@ -130,14 +151,16 @@ def execute_command(cmd, game_state, team):
         if target:
             tx, ty = entity_center(target)
             for uid in cmd["unit_ids"]:
-                unit = find_unit(uid)
+                unit = find_own_unit(uid)
                 if unit:
                     path = game_state.pathfind_to(unit.x, unit.y, tx, ty)
                     unit.set_target(path[0])
                     for wp in path[1:]:
                         unit.add_waypoint(wp)
-                    unit.target_enemy = target
-                    unit.attacking = True
+                    # Only combat units should attack; workers just move to the target
+                    if unit.attack_range > 0:
+                        unit.target_enemy = target
+                        unit.attacking = True
 
     elif cmd_type == "repair":
         target_type = cmd["target_type"]
@@ -149,7 +172,7 @@ def execute_command(cmd, game_state, team):
         if target:
             tx, ty = entity_center(target)
             for wid in cmd["worker_ids"]:
-                worker = find_unit(wid)
+                worker = find_own_unit(wid)
                 if worker and isinstance(worker, Worker):
                     worker.assign_to_repair(target)
                     path = game_state.pathfind_to(worker.x, worker.y, tx, ty)
