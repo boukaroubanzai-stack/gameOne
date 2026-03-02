@@ -249,6 +249,7 @@ def main():
     Watchguard.load_assets()
     Radar.load_assets()
     RepairCrane.load_assets()
+    _load_cement_texture()
 
     # Multiplayer connection phase
     net_session = None
@@ -1203,6 +1204,38 @@ def main():
         # --- Draw ---
         screen.fill(MAP_COLOR)
 
+        # Draw cement ground texture in buildable zones (unified, no overlap artifacts)
+        if _cement_texture is not None:
+            cement_layer = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+            for blist in (state.buildings, state.ai_player.buildings):
+                for b in blist:
+                    if b.hp <= 0:
+                        continue
+                    if isinstance(b, TownCenter):
+                        zr = BUILDING_ZONE_TC_RADIUS
+                    elif isinstance(b, Watchguard):
+                        zr = WATCHGUARD_ZONE_RADIUS
+                    else:
+                        zr = BUILDING_ZONE_BUILDING_RADIUS
+                    bcx = b.x + b.w // 2 - cam_x
+                    bcy = b.y + b.h // 2 - cam_y
+                    if bcx + zr < 0 or bcx - zr > WIDTH or bcy + zr < 0 or bcy - zr > MAP_HEIGHT:
+                        continue
+                    # Draw white circle as mask region (max alpha so overlaps unify)
+                    pygame.draw.circle(cement_layer, (255, 255, 255, 180), (int(bcx), int(bcy)), zr)
+            # Tile cement texture across the layer, masked by the circles
+            tw, th = _cement_texture.get_size()
+            # Offset tiling by camera so texture stays fixed in world space
+            ox = -(cam_x % tw)
+            oy = -(cam_y % th)
+            tiled = pygame.Surface((WIDTH, MAP_HEIGHT), pygame.SRCALPHA)
+            for tx in range(int(ox), WIDTH, tw):
+                for ty in range(int(oy), MAP_HEIGHT, th):
+                    tiled.blit(_cement_texture, (tx, ty))
+            # Use the circle mask to cut the tiled texture
+            tiled.blit(cement_layer, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+            screen.blit(tiled, (0, 0))
+
         # Draw grid lines for visual reference (only visible ones)
         grid_start_x = (cam_x // 64) * 64
         grid_start_y = (cam_y // 64) * 64
@@ -1215,13 +1248,18 @@ def main():
             if 0 <= sy <= MAP_HEIGHT:
                 pygame.draw.line(screen, (30, 75, 30), (0, sy), (WIDTH, sy), 1)
 
-        # Draw terrain obstacles
+        # Draw terrain obstacles (cliffs) with irregular shapes
         for rx, ry, rw, rh in state.terrain_rects:
             ox = rx - cam_x
             oy = ry - cam_y
-            if -rw < ox < WIDTH and -rh < oy < MAP_HEIGHT:
-                pygame.draw.rect(screen, (60, 50, 40), (ox, oy, rw, rh))
-                pygame.draw.rect(screen, (45, 38, 30), (ox, oy, rw, rh), 2)
+            if -rw - 40 < ox < WIDTH + 40 and -rh - 40 < oy < MAP_HEIGHT + 40:
+                result = _get_cliff_surface(rx, ry, rw, rh)
+                if result:
+                    surf, pad = result
+                    screen.blit(surf, (int(ox - pad), int(oy - pad)))
+                else:
+                    pygame.draw.rect(screen, (60, 50, 40), (ox, oy, rw, rh))
+                    pygame.draw.rect(screen, (45, 38, 30), (ox, oy, rw, rh), 2)
 
         # Helper to check if a world-space rect is visible on screen
         visible_rect = pygame.Rect(cam_x - 100, cam_y - 100, WIDTH + 200, MAP_HEIGHT + 200)
@@ -1687,6 +1725,122 @@ def _get_zone_surface(radius):
     return surf
 
 
+_cement_texture = None
+_cement_zone_cache: dict[int, pygame.Surface] = {}
+_cliff_textures: list[pygame.Surface] = []
+_cliff_surf_cache: dict[tuple, pygame.Surface] = {}
+
+
+def _make_cliff_polygon(rx, ry, rw, rh):
+    """Generate an irregular polygon for a cliff rect, deterministic from position."""
+    import random as _rng
+    r = _rng.Random(rx * 7919 + ry * 6271 + rw * 31 + rh * 17)
+    points = []
+    # Number of points per edge scales with edge length
+    margin = 0.15  # max inward/outward jitter as fraction of dimension
+
+    def edge_points(x1, y1, x2, y2, count, jitter_x, jitter_y):
+        """Generate points along an edge with perpendicular jitter."""
+        pts = []
+        for i in range(count):
+            t = (i + 0.5) / count
+            px = x1 + (x2 - x1) * t
+            py = y1 + (y2 - y1) * t
+            px += r.uniform(-jitter_x, jitter_x)
+            py += r.uniform(-jitter_y, jitter_y)
+            pts.append((px, py))
+        return pts
+
+    jx = rw * margin
+    jy = rh * margin
+    n_horiz = max(3, rw // 40)
+    n_vert = max(2, rh // 40)
+
+    # Top edge (left to right)
+    points.append((rx + r.uniform(5, jx), ry + r.uniform(5, jy)))
+    points.extend(edge_points(rx, ry, rx + rw, ry, n_horiz, jx * 0.5, jy))
+    # Right edge (top to bottom)
+    points.append((rx + rw - r.uniform(5, jx), ry + r.uniform(5, jy)))
+    points.extend(edge_points(rx + rw, ry, rx + rw, ry + rh, n_vert, jx, jy * 0.5))
+    # Bottom edge (right to left)
+    points.append((rx + rw - r.uniform(5, jx), ry + rh - r.uniform(5, jy)))
+    points.extend(edge_points(rx + rw, ry + rh, rx, ry + rh, n_horiz, jx * 0.5, jy))
+    # Left edge (bottom to top)
+    points.append((rx + r.uniform(5, jx), ry + rh - r.uniform(5, jy)))
+    points.extend(edge_points(rx, ry + rh, rx, ry, n_vert, jx, jy * 0.5))
+
+    return points
+
+
+def _get_cliff_surface(rx, ry, rw, rh):
+    """Return a cached textured cliff surface with irregular shape."""
+    key = (rx, ry, rw, rh)
+    surf = _cliff_surf_cache.get(key)
+    if surf is not None:
+        return surf
+
+    if not _cliff_textures:
+        return None
+
+    # Generate polygon in world coords, then offset to local surface coords
+    poly = _make_cliff_polygon(rx, ry, rw, rh)
+    # Add padding for jitter overflow
+    pad = 20
+    sw, sh = rw + pad * 2, rh + pad * 2
+    local_poly = [(px - rx + pad, py - ry + pad) for px, py in poly]
+
+    # Create surface and tile texture
+    surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    tex = _cliff_textures[(rx + ry) % len(_cliff_textures)]
+    tw, th = tex.get_size()
+    for ttx in range(0, sw, tw):
+        for tty in range(0, sh, th):
+            surf.blit(tex, (ttx, tty))
+
+    # Create polygon mask
+    mask = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    pygame.draw.polygon(mask, (255, 255, 255, 255), local_poly)
+    surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+
+    # Draw dark outline
+    pygame.draw.polygon(surf, (30, 25, 20), local_poly, 2)
+
+    _cliff_surf_cache[key] = (surf, pad)
+    return (surf, pad)
+
+def _load_cement_texture():
+    """Load cement tile texture and cliff textures (called once after pygame.init)."""
+    global _cement_texture
+    import os
+    path = os.path.join("assets", "cement.png")
+    if os.path.exists(path):
+        _cement_texture = pygame.image.load(path).convert()
+    for i in range(1, 4):
+        cliff_path = os.path.join("assets", f"cliff{i}.png")
+        if os.path.exists(cliff_path):
+            _cliff_textures.append(pygame.image.load(cliff_path).convert())
+
+def _get_cement_zone_surface(radius):
+    """Return a cached cement-textured circle surface for buildable zone ground."""
+    if _cement_texture is None:
+        return None
+    surf = _cement_zone_cache.get(radius)
+    if surf is None:
+        diam = radius * 2
+        surf = pygame.Surface((diam, diam), pygame.SRCALPHA)
+        tw, th = _cement_texture.get_size()
+        # Tile the cement texture across the surface
+        for tx in range(0, diam, tw):
+            for ty in range(0, diam, th):
+                surf.blit(_cement_texture, (tx, ty))
+        # Apply circular mask — clear pixels outside the circle
+        mask = pygame.Surface((diam, diam), pygame.SRCALPHA)
+        pygame.draw.circle(mask, (255, 255, 255, 180), (radius, radius), radius)
+        surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        _cement_zone_cache[radius] = surf
+    return surf
+
+
 # --- Camera-offset drawing helpers ---
 
 def _draw_mineral_node_offset(surface, node, cam_x, cam_y):
@@ -2080,6 +2234,7 @@ def _replay_main(filename):
     Watchguard.load_assets()
     Radar.load_assets()
     RepairCrane.load_assets()
+    _load_cement_texture()
 
     # Init replay proxy sprites
     ReplayUnit.init_sprites()
