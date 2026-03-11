@@ -27,7 +27,7 @@ from utils import TintedSpriteCache
 class RemotePlayer:
     """Replaces AIPlayer in multiplayer mode. Same data interface, no autonomous AI."""
 
-    def __init__(self):
+    def __init__(self, tc_pos=None, mineral_offsets=None, mineral_amount=None):
         self.resource_manager = ResourceManager()
         self.buildings = []
         self.units = []
@@ -38,14 +38,24 @@ class RemotePlayer:
 
         self._game_state = None  # set by GameState after init
 
-        self._setup()
+        self._setup(tc_pos=tc_pos, mineral_offsets=mineral_offsets, mineral_amount=mineral_amount)
 
-    def _setup(self):
+    def _setup(self, tc_pos=None, mineral_offsets=None, mineral_amount=None):
         """Initialize remote player starting state (mirrors AIPlayer._setup)."""
-        for x, y in AI_MINERAL_POSITIONS:
-            self.mineral_nodes.append(MineralNode(x, y))
+        from settings import MINERAL_NODE_AMOUNT
+        if tc_pos is None:
+            tc_pos = AI_TC_POS
+        if mineral_offsets is None:
+            mineral_offsets = MINERAL_OFFSETS
+        if mineral_amount is None:
+            mineral_amount = MINERAL_NODE_AMOUNT
 
-        tc = TownCenter(AI_TC_POS[0], AI_TC_POS[1])
+        # Place mineral nodes relative to AI TC position (mirrored: subtract dx)
+        for dx, dy in mineral_offsets:
+            mx, my = tc_pos[0] - dx, tc_pos[1] + dy
+            self.mineral_nodes.append(MineralNode(mx, my, amount=mineral_amount))
+
+        tc = TownCenter(tc_pos[0], tc_pos[1])
         tc.team = "ai"
         self.buildings.append(tc)
 

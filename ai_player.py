@@ -54,7 +54,7 @@ BUILDING_TYPE_MAP = {
 class AIPlayer:
     """Computer-controlled opponent that builds a base, trains units, and attacks."""
 
-    def __init__(self, profile=None, headless=False):
+    def __init__(self, profile=None, headless=False, tc_pos=None, mineral_offsets=None, mineral_amount=None):
         if profile is None:
             profile = {}
         self.think_interval = profile.get("think_interval", AI_THINK_INTERVAL)
@@ -69,6 +69,15 @@ class AIPlayer:
         self.max_towers = profile.get("max_towers", 0)
         self.build_radar = profile.get("build_radar", True)
         self.focus_fire_always = profile.get("focus_fire_always", False)
+
+        # Map-parameterized positions (None = use defaults)
+        self._tc_pos = tc_pos if tc_pos is not None else AI_TC_POS
+        if mineral_offsets is not None:
+            self._mineral_positions = [(self._tc_pos[0] + dx, self._tc_pos[1] + dy)
+                                       for dx, dy in mineral_offsets]
+        else:
+            self._mineral_positions = AI_MINERAL_POSITIONS
+        self._mineral_amount = mineral_amount
 
         self.resource_manager = ResourceManager()
         self.buildings = []
@@ -113,12 +122,12 @@ class AIPlayer:
 
     def _setup(self):
         """Set up AI starting state: mineral nodes, town center, workers."""
-        # Create AI mineral nodes on the right side
-        for x, y in AI_MINERAL_POSITIONS:
-            self.mineral_nodes.append(MineralNode(x, y))
+        from settings import MINERAL_NODE_AMOUNT
+        amount = self._mineral_amount if self._mineral_amount is not None else MINERAL_NODE_AMOUNT
+        for x, y in self._mineral_positions:
+            self.mineral_nodes.append(MineralNode(x, y, amount=amount))
 
-        # Place starting Town Center on the far right side of the world
-        tc = TownCenter(AI_TC_POS[0], AI_TC_POS[1])
+        tc = TownCenter(self._tc_pos[0], self._tc_pos[1])
         tc.team = "ai"
         self.buildings.append(tc)
         self._last_building_count = 1

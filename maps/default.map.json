@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "name": "Default",
+  "author": "",
+  "world_size": [10000, 5400],
+  "terrain_rects": [],
+  "starting_positions": {
+    "player": {
+      "tc_pos": [100, 280],
+      "mineral_offsets": [[250, -80], [200, 220], [500, -80], [500, 520], [800, 120], [1000, 70], [800, 720], [1200, -30], [1400, -130], [1500, 320]],
+      "starting_resources": 50,
+      "starting_workers": 3
+    },
+    "ai": {
+      "tc_pos": [8000, 280],
+      "mineral_offsets": [[250, -80], [200, 220], [500, -80], [500, 520], [800, 120], [1000, 70], [800, 720], [1200, -30], [1400, -130], [1500, 320]],
+      "starting_resources": 50,
+      "starting_workers": 3
+    }
+  },
+  "mineral_amount": 2500,
+  "symmetry": "mirror_x"
+}

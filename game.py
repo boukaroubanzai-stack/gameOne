@@ -210,6 +210,34 @@ def main():
             ai_profile_name = sys.argv[i + 1]
             break
 
+    # Parse --map argument
+    map_file = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--map" and i + 1 < len(sys.argv):
+            map_file = sys.argv[i + 1]
+            break
+
+    map_data = None
+    if map_file:
+        from map_format import load_map
+        map_data = load_map(map_file)
+
+    # Parse --editor argument
+    editor_mode = False
+    editor_file = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--editor":
+            editor_mode = True
+            if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+                editor_file = sys.argv[i + 1]
+            break
+
+    # Launch map editor if --editor was specified
+    if editor_mode:
+        from map_editor import run_editor
+        run_editor(editor_file)
+        return
+
     # Default mode: auto-host with AI subprocess (unless explicit --host/--join)
     auto_ai = False
     ai_proc = None
@@ -337,7 +365,7 @@ def main():
         local_team = "player"  # Spectator views from player perspective
 
     random_seed = net_session.random_seed if net_session else None
-    state = GameState(random_seed=random_seed)
+    state = GameState(random_seed=random_seed, map_data=map_data)
     hud = HUD()
     minimap = Minimap()
     disaster_mgr = DisasterManager(WORLD_W, WORLD_H)

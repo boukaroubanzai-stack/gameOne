@@ -6,7 +6,7 @@ import pygame
 from resources import ResourceManager
 from buildings import Barracks, Factory, TownCenter, DefenseTower, Watchguard, Radar, RepairCrane
 from units import Worker, Soldier, Scout, Tank
-from minerals import MineralNode, MINERAL_POSITIONS
+from minerals import MineralNode
 from waves import WaveManager
 from multiplayer_state import RemotePlayer
 from commands import BUILDING_CLASSES, BUILDING_COSTS
@@ -17,14 +17,14 @@ from entity_helpers import (
 from navigation import NavGrid
 from settings import (
     WORLD_W, WORLD_H, STARTING_WORKERS,
-    PLAYER_TC_POS,
+    PLAYER_TC_POS, AI_TC_POS, MINERAL_OFFSETS, MINERAL_NODE_AMOUNT,
     BUILDING_ZONE_TC_RADIUS, BUILDING_ZONE_BUILDING_RADIUS, WATCHGUARD_ZONE_RADIUS,
     SUPPLY_PER_TC, TANK_SUPPLY,
 )
 
 
 class GameState:
-    def __init__(self, random_seed=None):
+    def __init__(self, random_seed=None, map_data=None):
         self.resource_manager = ResourceManager()
         self.buildings = []
         self.units = []
@@ -41,18 +41,52 @@ class GameState:
         self.pending_deaths = []  # [(x, y, team, "unit"/"building")] for visual effects
         self.dying_units = []     # [(unit, timer)] fading dead player units
         self.dying_ai_units = []  # [(unit, timer)] fading dead AI units
-        self.ai_player = RemotePlayer()
+        self.map_data = map_data
         self.game_over = False
         self.game_result = None  # "victory" or "defeat"
         self.chat_log = []        # list of {"team": str, "message": str, "time": float}
         self.nav_grid = NavGrid()
         self.terrain_rects = []
-        if random_seed is not None:
-            random.seed(random_seed)
-            self.terrain_rects = self.nav_grid.generate_terrain(random_seed)
+
+        # Extract positions from map_data or use defaults
+        if map_data is not None:
+            player_tc_pos = tuple(map_data["starting_positions"]["player"]["tc_pos"])
+            ai_tc_pos = tuple(map_data["starting_positions"]["ai"]["tc_pos"])
+            player_mineral_offsets = [tuple(o) for o in map_data["starting_positions"]["player"].get("mineral_offsets", MINERAL_OFFSETS)]
+            ai_mineral_offsets = [tuple(o) for o in map_data["starting_positions"]["ai"].get("mineral_offsets", MINERAL_OFFSETS)]
+            mineral_amount = map_data.get("mineral_amount", MINERAL_NODE_AMOUNT)
+
+            # Terrain: load from map_data or fall back to procedural generation
+            if map_data.get("terrain_rects"):
+                terrain_input = [tuple(r) for r in map_data["terrain_rects"]]
+                self.terrain_rects = self.nav_grid.load_terrain(terrain_input, player_tc_pos, ai_tc_pos)
+            elif random_seed is not None:
+                random.seed(random_seed)
+                self.terrain_rects = self.nav_grid.generate_terrain(random_seed)
+
+            # Create AI/remote player with map-specified positions
+            self.ai_player = RemotePlayer(
+                tc_pos=ai_tc_pos,
+                mineral_offsets=ai_mineral_offsets,
+                mineral_amount=mineral_amount,
+            )
+        else:
+            player_tc_pos = PLAYER_TC_POS
+            player_mineral_offsets = MINERAL_OFFSETS
+            mineral_amount = MINERAL_NODE_AMOUNT
+
+            if random_seed is not None:
+                random.seed(random_seed)
+                self.terrain_rects = self.nav_grid.generate_terrain(random_seed)
+
+            self.ai_player = RemotePlayer()
 
         self.ai_player._game_state = self
-        self._setup_starting_state()
+        self._setup_starting_state(
+            tc_pos=player_tc_pos,
+            mineral_offsets=player_mineral_offsets,
+            mineral_amount=mineral_amount,
+        )
 
     def assign_unit_id(self, unit):
         unit.net_id = self._next_unit_id
@@ -80,13 +114,21 @@ class GameState:
             return building
         return None
 
-    def _setup_starting_state(self):
-        # Place mineral nodes
-        for x, y in MINERAL_POSITIONS:
-            self.mineral_nodes.append(MineralNode(x, y))
+    def _setup_starting_state(self, tc_pos=None, mineral_offsets=None, mineral_amount=None):
+        if tc_pos is None:
+            tc_pos = PLAYER_TC_POS
+        if mineral_offsets is None:
+            mineral_offsets = MINERAL_OFFSETS
+        if mineral_amount is None:
+            mineral_amount = MINERAL_NODE_AMOUNT
+
+        # Place mineral nodes relative to player TC position
+        for dx, dy in mineral_offsets:
+            mx, my = tc_pos[0] + dx, tc_pos[1] + dy
+            self.mineral_nodes.append(MineralNode(mx, my, amount=mineral_amount))
 
         # Place starting Town Center
-        tc = TownCenter(PLAYER_TC_POS[0], PLAYER_TC_POS[1])
+        tc = TownCenter(tc_pos[0], tc_pos[1])
         self.assign_building_id(tc)
         self.buildings.append(tc)
 

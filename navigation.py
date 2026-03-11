@@ -89,6 +89,51 @@ class NavGrid:
                     return False
         return True
 
+    # --- Terrain loading (from map editor data) ---
+
+    def load_terrain(self, terrain_rects, player_tc_pos=None, ai_tc_pos=None):
+        """Load pre-defined terrain rects. Mark on grid, save static grid, BFS check.
+        Returns the (possibly trimmed) list of rects."""
+        from settings import PLAYER_TC_POS as DEFAULT_PTC, AI_TC_POS as DEFAULT_ATC
+        ptc = player_tc_pos or DEFAULT_PTC
+        atc = ai_tc_pos or DEFAULT_ATC
+
+        rects = list(terrain_rects)
+
+        # Mark terrain on grid
+        for rx, ry, rw, rh in rects:
+            gx1 = max(0, rx // NAV_TILE_SIZE)
+            gy1 = max(0, ry // NAV_TILE_SIZE)
+            gx2 = min(GRID_W - 1, (rx + rw) // NAV_TILE_SIZE)
+            gy2 = min(GRID_H - 1, (ry + rh) // NAV_TILE_SIZE)
+            for gy in range(gy1, gy2 + 1):
+                for gx in range(gx1, gx2 + 1):
+                    self._set(gx, gy, TERRAIN)
+
+        # Connectivity check: BFS from player TC to AI TC
+        pg = self.world_to_grid(ptc[0] + 32, ptc[1] + 32)
+        ag = self.world_to_grid(atc[0] + 32, atc[1] + 32)
+        if not self._bfs_connected(pg, ag):
+            while rects and not self._bfs_connected(pg, ag):
+                rects.pop()
+                if rects:
+                    rects.pop()
+                # Rebuild grid
+                self.grid = bytearray(GRID_W * GRID_H)
+                for rx, ry, rw, rh in rects:
+                    gx1 = max(0, rx // NAV_TILE_SIZE)
+                    gy1 = max(0, ry // NAV_TILE_SIZE)
+                    gx2 = min(GRID_W - 1, (rx + rw) // NAV_TILE_SIZE)
+                    gy2 = min(GRID_H - 1, (ry + rh) // NAV_TILE_SIZE)
+                    for gy in range(gy1, gy2 + 1):
+                        for gx in range(gx1, gx2 + 1):
+                            self._set(gx, gy, TERRAIN)
+
+        # Save static grid (terrain only, no buildings yet)
+        self._static_grid[:] = self.grid
+        self.terrain_rects = rects
+        return rects
+
     # --- Terrain generation ---
 
     def generate_terrain(self, seed):
